@@ -149,11 +149,13 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
                     },
                 )
 
-        placeholders: dict[str, str] = {}
-        if self._friendly_name:
-            placeholders["name"] = self._friendly_name
-        if self._host:
-            placeholders["host"] = self._host
+        # The description references both {name} and {host}; formatjs errors
+        # if either is missing. Provide empty strings as fallback for paths
+        # that don't know the friendly name yet (e.g. manual entry).
+        placeholders = {
+            "name": self._friendly_name or "",
+            "host": self._host or "",
+        }
 
         return self.async_show_form(
             step_id="credentials",

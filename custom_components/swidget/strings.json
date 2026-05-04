@@ -22,7 +22,7 @@
         }
       },
       "credentials": {
-        "description": "{name} ({host}) requires a secure connection. Enter the device credentials.",
+        "description": "The device at {host} requires a secure connection. Enter its credentials.",
         "data": {
           "token_name": "Token header name",
           "secret_key": "Secret key"
