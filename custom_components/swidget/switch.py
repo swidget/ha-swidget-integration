@@ -56,9 +56,18 @@ class SwidgetPowerSwitch(SwidgetEntity, SwitchEntity):
         )
 
     @property
-    def is_on(self) -> bool:
-        """Return whether the device is currently on."""
-        return self.coordinator.device.is_on
+    def is_on(self) -> bool | None:
+        """Return whether the device is currently on, or None if unknown.
+
+        SwidgetComponent initializes ``functions`` entries to None as
+        placeholders before process_state populates them. If state hasn't
+        landed yet (or process_state silently failed), the SDK's is_on
+        crashes on ``None["state"]``. Surface that as "unknown" instead.
+        """
+        try:
+            return self.coordinator.device.is_on
+        except (TypeError, KeyError, AttributeError):
+            return None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the device on."""
@@ -84,9 +93,12 @@ class SwidgetUsbInsertSwitch(SwidgetEntity, SwitchEntity):
         self._attr_unique_id = f"{coordinator.device.mac_address}_usb"
 
     @property
-    def is_on(self) -> bool:
-        """Return whether the USB insert is currently on."""
-        return self.coordinator.device.usb_is_on
+    def is_on(self) -> bool | None:
+        """Return whether the USB insert is currently on, or None if unknown."""
+        try:
+            return self.coordinator.device.usb_is_on
+        except (TypeError, KeyError, AttributeError):
+            return None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the USB insert on."""
