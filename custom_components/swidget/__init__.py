@@ -48,6 +48,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.process_summary(summary)
         state = await device.make_http_request("GET", "state")
         await device.process_state(state)
+        # process_summary doesn't touch _friendly_name, so without this
+        # the device registry would show "Unknown Swidget Device".
+        await device.get_friendly_name()
     except SwidgetException as err:
         await device.close()
         raise ConfigEntryNotReady(f"Could not read state from {entry.data[CONF_HOST]}") from err
