@@ -3,30 +3,33 @@
     "flow_title": "{name} ({host})",
     "step": {
       "user": {
-        "description": "Enter the host of your Swidget device. Leave the host blank to scan the network.",
-        "data": {
-          "host": "Host",
-          "token_name": "Token header name",
-          "secret_key": "Secret key",
-          "use_https": "Use HTTPS"
+        "description": "How would you like to add your Swidget device?",
+        "menu_options": {
+          "scan": "Scan the network for devices",
+          "manual": "Enter device details manually"
         }
       },
-      "pick_device": {
-        "description": "Choose a discovered Swidget device and enter its credentials.",
+      "manual": {
+        "description": "Enter the host or IP address of your Swidget device.",
         "data": {
-          "device": "Device",
+          "host": "Host"
+        }
+      },
+      "scan": {
+        "description": "Choose a discovered Swidget device.",
+        "data": {
+          "device": "Device"
+        }
+      },
+      "credentials": {
+        "description": "{name} ({host}) requires a secure connection. Enter the device credentials.",
+        "data": {
           "token_name": "Token header name",
-          "secret_key": "Secret key",
-          "use_https": "Use HTTPS"
+          "secret_key": "Secret key"
         }
       },
       "discovery_confirm": {
-        "description": "Set up {name} ({host})?",
-        "data": {
-          "token_name": "Token header name",
-          "secret_key": "Secret key",
-          "use_https": "Use HTTPS"
-        }
+        "description": "Set up {name} ({host})?"
       }
     },
     "error": {
@@ -35,6 +38,7 @@
     },
     "abort": {
       "already_configured": "Device is already configured",
+      "cannot_connect": "Failed to connect",
       "no_devices_found": "No devices found on the network",
       "invalid_discovery_info": "Invalid discovery information received."
     }
