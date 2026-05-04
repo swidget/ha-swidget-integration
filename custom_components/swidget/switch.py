@@ -1,0 +1,99 @@
+"""Switch platform for Swidget devices."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from swidget import InsertType
+
+from homeassistant.components.switch import (
+    SwitchDeviceClass,
+    SwitchEntity,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import DOMAIN
+from .coordinator import SwidgetDataUpdateCoordinator
+from .entity import SwidgetEntity
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Swidget switches from a config entry."""
+    coordinator: SwidgetDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    device = coordinator.device
+
+    entities: list[SwitchEntity] = []
+
+    # Dimmers expose their on/off through the light platform instead.
+    if not device.is_dimmer:
+        entities.append(SwidgetPowerSwitch(coordinator))
+
+    if device.insert_type == InsertType.USB:
+        entities.append(SwidgetUsbInsertSwitch(coordinator))
+
+    async_add_entities(entities)
+
+
+class SwidgetPowerSwitch(SwidgetEntity, SwitchEntity):
+    """The host on/off control for outlets, switches, and timer switches."""
+
+    _attr_translation_key = "power"
+    _attr_name = "Power"
+
+    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+        """Initialize the host power switch."""
+        super().__init__(coordinator)
+        device = coordinator.device
+        self._attr_unique_id = f"{device.mac_address}_power"
+        self._attr_device_class = (
+            SwitchDeviceClass.OUTLET if device.is_outlet else SwitchDeviceClass.SWITCH
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether the device is currently on."""
+        return self.coordinator.device.is_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the device on."""
+        await self.coordinator.device.turn_on()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the device off."""
+        await self.coordinator.device.turn_off()
+        await self.coordinator.async_request_refresh()
+
+
+class SwidgetUsbInsertSwitch(SwidgetEntity, SwitchEntity):
+    """On/off control for the USB insert."""
+
+    _attr_translation_key = "usb"
+    _attr_name = "USB"
+    _attr_device_class = SwitchDeviceClass.OUTLET
+
+    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+        """Initialize the USB insert switch."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.device.mac_address}_usb"
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether the USB insert is currently on."""
+        return self.coordinator.device.usb_is_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the USB insert on."""
+        await self.coordinator.device.turn_on_usb_insert()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the USB insert off."""
+        await self.coordinator.device.turn_off_usb_insert()
+        await self.coordinator.async_request_refresh()

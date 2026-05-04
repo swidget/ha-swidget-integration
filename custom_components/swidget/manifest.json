@@ -1,0 +1,19 @@
+{
+  "domain": "swidget",
+  "name": "Swidget",
+  "version": "0.1.0",
+  "documentation": "https://github.com/swidget/ha-swidget-integration",
+  "issue_tracker": "https://github.com/swidget/ha-swidget-integration/issues",
+  "codeowners": ["@swidget"],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "integration_type": "device",
+  "requirements": ["python-swidget==1.4.0"],
+  "dependencies": ["ssdp"],
+  "ssdp": [
+    {
+      "st": "urn:swidget:pico:1"
+    }
+  ],
+  "loggers": ["swidget"]
+}
