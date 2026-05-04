@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env/
+.venv/
+venv/
+
+# Node (used by debug_ws_drop.js)
+node_modules/
+package-lock.json
+package.json
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
