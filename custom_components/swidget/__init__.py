@@ -38,6 +38,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except SwidgetException as err:
         raise ConfigEntryNotReady(f"Could not connect to {entry.data[CONF_HOST]}") from err
 
+    # Pre-populate identity + state over HTTP. The SDK's websocket-mode
+    # get_summary/get_state are fire-and-forget — they send a request and
+    # return before the response is processed by the message handler — so
+    # device.mac_address etc. won't be set in time for the device-registry
+    # call below.
+    try:
+        summary = await device.make_http_request("GET", "summary")
+        await device.process_summary(summary)
+        state = await device.make_http_request("GET", "state")
+        await device.process_state(state)
+    except SwidgetException as err:
+        await device.close()
+        raise ConfigEntryNotReady(f"Could not read state from {entry.data[CONF_HOST]}") from err
+
     coordinator = SwidgetDataUpdateCoordinator(hass, device)
 
     # Hook websocket pushes into the coordinator so subscribed entities
@@ -50,6 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.close()
         raise ConfigEntryNotReady(f"Could not start device {entry.data[CONF_HOST]}") from err
 
+    # Pre-populated above; this just marks the coordinator healthy.
     await coordinator.async_config_entry_first_refresh()
 
     # Register the device once at setup so platforms can reference it
