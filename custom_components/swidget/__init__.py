@@ -64,6 +64,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.close()
         raise ConfigEntryNotReady(f"Could not start device {entry.data[CONF_HOST]}") from err
 
+    # device.start() only opens the websocket; it doesn't pump messages.
+    # Spawn the receiver loop ourselves so push updates actually reach the
+    # registered callback. Tying it to the entry means HA cancels it on
+    # unload.
+    entry.async_create_background_task(
+        hass,
+        device.get_websocket().run(),
+        name=f"swidget_websocket_{device.ip_address}",
+    )
+
     # Pre-populated above; this just marks the coordinator healthy.
     await coordinator.async_config_entry_first_refresh()
 
