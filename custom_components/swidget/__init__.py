@@ -51,6 +51,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # process_summary doesn't touch _friendly_name, so without this
         # the device registry would show "Unknown Swidget Device".
         await device.get_friendly_name()
+        # device_config drives the camera + RTSP switch; the websocket
+        # isn't connected yet so this routes through the HTTP fallback.
+        # Subsequent refreshes (after our writes) flow over the websocket.
+        await device.get_device_config()
     except SwidgetException as err:
         await device.close()
         raise ConfigEntryNotReady(f"Could not read state from {entry.data[CONF_HOST]}") from err
