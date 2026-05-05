@@ -8,11 +8,14 @@
   "config_flow": true,
   "iot_class": "local_push",
   "integration_type": "device",
-  "requirements": ["python-swidget==1.4.10"],
+  "requirements": ["python-swidget==1.4.11"],
   "dependencies": ["ssdp"],
   "ssdp": [
     {
       "st": "urn:swidget:pico:1"
+    },
+    {
+      "st": "urn:swidget:video:1"
     }
   ],
   "loggers": ["swidget"]
