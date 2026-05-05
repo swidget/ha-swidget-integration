@@ -11,6 +11,7 @@ DOMAIN: Final = "swidget"
 PLATFORMS: Final[list[Platform]] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.CAMERA,
     Platform.LIGHT,
     Platform.NUMBER,
     Platform.SENSOR,
