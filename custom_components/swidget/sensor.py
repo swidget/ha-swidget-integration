@@ -1,9 +1,17 @@
-"""Diagnostic sensors that surface device structure on the device page."""
+"""Sensor platform — diagnostic structure sensors plus insert measurements."""
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from dataclasses import dataclass
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -11,6 +19,45 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import SwidgetDataUpdateCoordinator
 from .entity import SwidgetEntity
+
+
+@dataclass(frozen=True, kw_only=True)
+class SwidgetInsertSensorDescription(SensorEntityDescription):
+    """Description for a sensor that reads a single field of an insert function.
+
+    ``function`` is the function tag in ``component.functions`` (e.g.
+    ``"temperature"``); ``field`` is the key inside that function's
+    datapoint dict (e.g. ``"now"``). Adding a new measurement here is
+    almost always a one-entry tuple addition below.
+    """
+
+    function: str
+    field: str = "now"
+
+
+# Catalogue of insert measurement sensors. New sensors usually require
+# only an entry in this tuple — the generic SwidgetInsertSensor below
+# handles the lookup, error gating, and unique_id wiring.
+INSERT_SENSOR_DESCRIPTIONS: tuple[SwidgetInsertSensorDescription, ...] = (
+    SwidgetInsertSensorDescription(
+        key="temperature",
+        function="temperature",
+        name="Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+    ),
+    SwidgetInsertSensorDescription(
+        key="humidity",
+        function="humidity",
+        name="Humidity",
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=1,
+    ),
+)
 
 
 async def async_setup_entry(
@@ -47,6 +94,17 @@ async def async_setup_entry(
                 entities.append(
                     SwidgetTimerStatusSensor(coordinator, component_id)
                 )
+    # Insert measurement sensors driven by the description catalogue.
+    # Detect by function presence on each insert component so a sensor
+    # only materialises when the underlying datapoint actually exists.
+    insert = coordinator.device.assemblies.get("insert")
+    if insert is not None:
+        for component_id, component in insert.components.items():
+            for description in INSERT_SENSOR_DESCRIPTIONS:
+                if description.function in component.functions:
+                    entities.append(
+                        SwidgetInsertSensor(coordinator, component_id, description)
+                    )
     async_add_entities(entities)
 
 
@@ -76,6 +134,72 @@ def _assembly_type_label(
     if assembly is None:
         return None
     return getattr(assembly, "type", None) or None
+
+
+class SwidgetInsertSensor(SwidgetEntity, SensorEntity):
+    """Generic insert sensor driven by a SwidgetInsertSensorDescription.
+
+    Reads ``description.field`` out of ``component.functions[description.function]``
+    and reports unavailable when the function reports ``error != 0``
+    (the SDK's MissingHardware signal).
+    """
+
+    entity_description: SwidgetInsertSensorDescription
+
+    def __init__(
+        self,
+        coordinator: SwidgetDataUpdateCoordinator,
+        component_id: str,
+        description: SwidgetInsertSensorDescription,
+    ) -> None:
+        """Initialize an insert sensor for the given description."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_insert_{component_id}_{description.key}"
+        )
+
+    def _function_state(self) -> dict | None:
+        """Return the live datapoint dict for this function, or None."""
+        try:
+            value = (
+                self.coordinator.device.assemblies["insert"]
+                .components[self._component_id]
+                .functions.get(self.entity_description.function)
+            )
+        except (KeyError, AttributeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @property
+    def available(self) -> bool:
+        """Available once we've seen a valid (error-free) datapoint."""
+        state = self._function_state()
+        if state is None:
+            return False
+        # Per SDK: error != 0 means MissingHardware; readings aren't
+        # meaningful in that case, so report unavailable rather than
+        # surfacing stale or zeroed values.
+        return int(state.get("error") or 0) == 0
+
+    @property
+    def native_value(self) -> float | int | str | None:
+        """Return the field value pulled from the function datapoint."""
+        state = self._function_state()
+        if state is None:
+            return None
+        value = state.get(self.entity_description.field)
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            # Booleans need to be excluded explicitly because they're a
+            # subclass of int — handing one to a SensorEntity would
+            # render as 1/0 and lie about the device class.
+            return None
+        if isinstance(value, (int, float, str)):
+            return value
+        return None
 
 
 class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):

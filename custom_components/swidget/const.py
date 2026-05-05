@@ -9,7 +9,9 @@ from homeassistant.const import Platform
 DOMAIN: Final = "swidget"
 
 PLATFORMS: Final[list[Platform]] = [
+    Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.LIGHT,
     Platform.NUMBER,
     Platform.SENSOR,
     Platform.SWITCH,
