@@ -55,7 +55,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.close()
         raise ConfigEntryNotReady(f"Could not read state from {entry.data[CONF_HOST]}") from err
 
-    coordinator = SwidgetDataUpdateCoordinator(hass, device)
+    coordinator = SwidgetDataUpdateCoordinator(hass, device, entry.entry_id)
+    # Snapshot the layout we just loaded so the websocket callback can
+    # tell when the user has physically moved the host into a different
+    # base and trigger a reload to rebuild entities.
+    coordinator.capture_structure_fingerprint()
 
     # Hook websocket pushes into the coordinator so subscribed entities
     # update immediately on device-side events.
