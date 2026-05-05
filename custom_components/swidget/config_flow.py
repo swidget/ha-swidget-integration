@@ -10,6 +10,7 @@ import voluptuous as vol
 from swidget import SwidgetException, detect_secure
 from swidget.discovery import (
     SwidgetDiscoveredDevice,
+    device_id_from_ssdp,
     discover_devices,
     discover_single,
 )
@@ -17,7 +18,6 @@ from swidget.discovery import (
 from homeassistant.components import ssdp
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST
-from homeassistant.helpers.device_registry import format_mac
 
 from .const import (
     CONF_SECRET_KEY,
@@ -37,7 +37,11 @@ async def _async_validate_credentials(
 ) -> tuple[str, str]:
     """Open the device with the given credentials and read its identity.
 
-    Returns (friendly_name, mac_address). Raises SwidgetException on failure.
+    Returns (friendly_name, device_id). The device id is what the firmware
+    reports as ``mac`` in /api/v1/summary — it's the canonical per-device
+    string, but it's a real MAC only on pico (12 hex). On video it's a
+    longer opaque id (24 hex), so we treat it as an opaque key throughout
+    the flow rather than running it through format_mac.
     """
     device = await discover_single(
         host=host,
@@ -125,7 +129,7 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
             token_name = user_input[CONF_TOKEN_NAME]
             secret_key = user_input[CONF_SECRET_KEY]
             try:
-                friendly_name, mac = await _async_validate_credentials(
+                friendly_name, device_id = await _async_validate_credentials(
                     host=self._host,
                     use_https=True,
                     token_name=token_name,
@@ -137,7 +141,7 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected error connecting to %s", self._host)
                 errors["base"] = "unknown"
             else:
-                await self.async_set_unique_id(format_mac(mac))
+                await self.async_set_unique_id(device_id)
                 self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
                 return self.async_create_entry(
                     title=friendly_name,
@@ -179,9 +183,9 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
         """Show a list of SSDP-discovered devices; probe the chosen one."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            mac = user_input[CONF_DEVICE]
-            discovered = self._discovered_devices[mac]
-            await self.async_set_unique_id(format_mac(mac), raise_on_progress=False)
+            device_id = user_input[CONF_DEVICE]
+            discovered = self._discovered_devices[device_id]
+            await self.async_set_unique_id(device_id, raise_on_progress=False)
             self._abort_if_unique_id_configured()
             try:
                 self._use_https = await detect_secure(discovered.host)
@@ -192,19 +196,21 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 self._host = discovered.host
-                self._mac = mac
+                self._mac = device_id
                 self._friendly_name = discovered.friendly_name
                 if self._use_https:
                     return await self.async_step_credentials()
                 return await self._async_finalize_no_auth()
 
-        # Fresh scan; filter out already-configured devices.
+        # Fresh scan; filter out already-configured devices. The library now
+        # keys discovered_devices by the canonical device id, so a direct
+        # match against entry.unique_id is correct for both pico and video.
         configured = {entry.unique_id for entry in self._async_current_entries()}
         self._discovered_devices = await discover_devices()
         choices = {
-            mac: f"{dev.friendly_name} ({dev.host})"
-            for mac, dev in self._discovered_devices.items()
-            if format_mac(mac) not in configured
+            device_id: f"{dev.friendly_name} ({dev.host})"
+            for device_id, dev in self._discovered_devices.items()
+            if device_id not in configured
         }
         if not choices:
             return self.async_abort(reason="no_devices_found")
@@ -225,13 +231,19 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle a device discovered via HA's SSDP listener."""
         location = discovery_info.ssdp_location or ""
         host = urlparse(location).hostname
-        usn = discovery_info.ssdp_usn or ""
-        # USN is uuid:...-<MAC>; the MAC is the last hyphenated segment.
-        mac = usn.split("-")[-1] if usn else ""
-        if not host or not mac:
+        # The canonical device id is encoded in the USN, but its shape is
+        # ST-dependent (pico = last UUID segment, video = leading 24 hex of
+        # the padded UUID), so go through the shared parser. We can't just
+        # fetch /api/v1/summary here — HTTPS+auth devices won't answer
+        # without credentials, which we don't have until async_step_credentials.
+        device_id = device_id_from_ssdp(
+            discovery_info.ssdp_usn or "",
+            (discovery_info.ssdp_st or "").lower(),
+        )
+        if not host or not device_id:
             return self.async_abort(reason="invalid_discovery_info")
 
-        await self.async_set_unique_id(format_mac(mac))
+        await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host})
 
         # Pull a friendly name from the SERVER header if present:
@@ -245,7 +257,7 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="cannot_connect")
 
         self._host = host
-        self._mac = mac
+        self._mac = device_id
         self._friendly_name = friendly_name
         self.context["title_placeholders"] = {"name": friendly_name, "host": host}
 
@@ -275,10 +287,10 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
     # --------------------------------------------------------------------- #
 
     async def _async_finalize_no_auth(self) -> ConfigFlowResult:
-        """Connect (no creds), read MAC + friendly name, and create the entry."""
+        """Connect (no creds), read identity, and create the entry."""
         assert self._host is not None and self._use_https is False
         try:
-            friendly_name, mac = await _async_validate_credentials(
+            friendly_name, device_id = await _async_validate_credentials(
                 host=self._host,
                 use_https=False,
                 token_name="",
@@ -288,7 +300,7 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
             # Probe said HTTP works but the SDK couldn't reach it; surface as error.
             return self.async_abort(reason="cannot_connect")
 
-        await self.async_set_unique_id(format_mac(mac))
+        await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
         return self.async_create_entry(
             title=friendly_name,

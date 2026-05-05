@@ -55,6 +55,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.close()
         raise ConfigEntryNotReady(f"Could not read state from {entry.data[CONF_HOST]}") from err
 
+    # Migrate entries that were created back when unique_id was format_mac
+    # of the device's "mac" field. Both pico and video now key on the raw
+    # device id (device.mac_address) so SSDP discovery dedupes correctly
+    # against existing entries.
+    if entry.unique_id != device.mac_address:
+        hass.config_entries.async_update_entry(entry, unique_id=device.mac_address)
+
     coordinator = SwidgetDataUpdateCoordinator(hass, device, entry.entry_id)
     # Snapshot the layout we just loaded so the websocket callback can
     # tell when the user has physically moved the host into a different
