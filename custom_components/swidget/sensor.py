@@ -67,10 +67,15 @@ def _assembly_type_label(
 
 
 class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):
-    """Reports the host (base device) type, e.g. switch, outlet, dimmer."""
+    """Reports the host (base device) type, e.g. switch, outlet, dimmer.
+
+    Named "Host" (not "Host type") so it sorts as a prefix before the
+    "Host component N" entities on the device page — HA orders diagnostic
+    entities alphabetically by display name.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Host type"
+    _attr_name = "Host"
 
     def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
         """Initialize the host type sensor."""
@@ -86,10 +91,14 @@ class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):
 
 
 class SwidgetInsertTypeSensor(SwidgetEntity, SensorEntity):
-    """Reports the insert type, e.g. USB, TEMP HUMI MOTION, video."""
+    """Reports the insert type, e.g. USB, TEMP HUMI MOTION, video.
+
+    Named "Insert" (not "Insert type") so it sorts as a prefix before
+    the "Insert component N" entities on the device page.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Insert type"
+    _attr_name = "Insert"
 
     def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
         """Initialize the insert type sensor."""
