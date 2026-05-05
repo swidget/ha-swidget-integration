@@ -59,7 +59,6 @@ class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
     at the rightmost position while the load is in permanent-on mode.
     """
 
-    _attr_name = "Timer"
     _attr_mode = NumberMode.SLIDER
     _attr_native_min_value = 0
     _attr_native_max_value = FORCE_ON_SENTINEL
@@ -105,6 +104,19 @@ class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
         if int(timer.get("buttonLevel") or 0) == FORCE_ON_SENTINEL:
             return FORCE_ON_SENTINEL
         return int(timer.get("buttonTimer") or 0)
+
+    @property
+    def name(self) -> str:
+        """Annotate the slider name with the active mode for in-Controls visibility."""
+        timer = self._timer_state()
+        if timer is None:
+            return "Timer"
+        if int(timer.get("buttonLevel") or 0) == FORCE_ON_SENTINEL:
+            return "Timer (Permanent on)"
+        minutes = int(timer.get("buttonTimer") or 0)
+        if minutes > 0:
+            return f"Timer ({minutes} min remaining)"
+        return "Timer (Off)"
 
     @property
     def icon(self) -> str | None:
