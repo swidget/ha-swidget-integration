@@ -12,11 +12,12 @@ from .const import DOMAIN
 from .coordinator import SwidgetDataUpdateCoordinator
 from .entity import SwidgetEntity
 
-# The "20/40/60 switch" tops out at 60 minutes per preset level
-# (3 levels = 180 min total). 240 leaves headroom for hosts that
-# may report a longer max via firmware updates without silently
-# capping user input.
-TIMER_MAX_MINUTES = 240
+# Sliding the entity to its rightmost position (FORCE_ON_SENTINEL)
+# sends the device's "force permanent on" magic value (level 255),
+# overriding any active timer without cycling the load. Anything
+# in (0, FORCE_ON_SENTINEL) is treated as a duration in minutes.
+# 0 cancels the timer (turning the load off, matching device behavior).
+FORCE_ON_SENTINEL = 255
 
 
 async def async_setup_entry(
@@ -45,26 +46,30 @@ async def async_setup_entry(
 
 
 class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
-    """Set / read the host load timer duration in minutes.
+    """Combined timer + force-on slider for the host load timer.
 
-    Reading returns the active button-initiated timer (the auto-timer
-    fields aren't surfaced — both physical button and HA-issued commands
-    land in buttonTimer / buttonLevel). Writing sends ``{"duration": N}``
-    — set to 0 to cancel the active timer. To turn the load on
-    permanently, use the existing power switch (toggle), not this.
+    Slider semantics:
+      * 0 — cancel the timer (load goes off, matching device behavior)
+      * 1..254 — start a timer for N minutes
+      * 255 (max) — force the load permanently on, overriding any
+        active timer (sends ``{"level": 255}``)
+
+    Reading prefers ``buttonLevel == 255`` (which the device reports
+    after a force-on) over ``buttonTimer`` so the slider stays pinned
+    at the rightmost position while the load is in permanent-on mode.
     """
 
     _attr_name = "Timer"
-    _attr_mode = NumberMode.BOX
+    _attr_mode = NumberMode.SLIDER
     _attr_native_min_value = 0
-    _attr_native_max_value = TIMER_MAX_MINUTES
+    _attr_native_max_value = FORCE_ON_SENTINEL
     _attr_native_step = 1
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
 
     def __init__(
         self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
     ) -> None:
-        """Initialize the timer-duration number."""
+        """Initialize the timer-duration slider."""
         super().__init__(coordinator)
         self._component_id = component_id
         self._attr_unique_id = (
@@ -90,10 +95,15 @@ class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        """Return the active button-initiated timer duration in minutes."""
+        """Return the slider position reflecting current timer/force-on state."""
         timer = self._timer_state()
         if timer is None:
             return None
+        # buttonLevel == 255 is the device's "permanent on" indicator.
+        # Pin the slider at the sentinel so the UI doesn't snap back to
+        # 0 (buttonTimer is 0 in that mode).
+        if int(timer.get("buttonLevel") or 0) == FORCE_ON_SENTINEL:
+            return FORCE_ON_SENTINEL
         return int(timer.get("buttonTimer") or 0)
 
     @property
@@ -102,11 +112,17 @@ class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
         return self._timer_state() is not None
 
     async def async_set_native_value(self, value: float) -> None:
-        """Send a new timer duration to the device. 0 cancels the timer."""
+        """Translate slider position into the appropriate timer command."""
+        target = int(value)
+        if target >= FORCE_ON_SENTINEL:
+            command: dict = {"level": FORCE_ON_SENTINEL}
+        else:
+            # Includes target == 0, which the device treats as cancel.
+            command = {"duration": target}
         await self.coordinator.device.send_command(
             assembly="host",
             component=self._component_id,
             function="timer",
-            command={"duration": int(value)},
+            command=command,
         )
         await self.coordinator.async_request_refresh()
