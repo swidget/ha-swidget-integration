@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "swidget"
 
-PLATFORMS: Final[list[Platform]] = [Platform.SWITCH]
+PLATFORMS: Final[list[Platform]] = [Platform.SENSOR, Platform.SWITCH]
 
 CONF_TOKEN_NAME: Final = "token_name"
 CONF_SECRET_KEY: Final = "secret_key"

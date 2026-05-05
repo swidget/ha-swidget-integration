@@ -11,6 +11,9 @@ node_modules/
 package-lock.json
 package.json
 
+# Local notes
+CLAUDE.md
+
 # Editor / OS
 .idea/
 .vscode/

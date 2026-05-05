@@ -89,7 +89,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(device.mac_address))},
         manufacturer="Swidget",
         name=device.friendly_name,
-        model=device.model,
+        model="Swidget WiFi Insert",
+        model_id=device.model,
         sw_version=device.version,
     )
 
