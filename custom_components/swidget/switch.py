@@ -37,6 +37,9 @@ async def async_setup_entry(
     if device.insert_type == InsertType.USB:
         entities.append(SwidgetUsbInsertSwitch(coordinator))
 
+    if device.insert_type == InsertType.VIDEO:
+        entities.append(SwidgetRtspSwitch(coordinator))
+
     async_add_entities(entities)
 
 
@@ -108,4 +111,31 @@ class SwidgetUsbInsertSwitch(SwidgetEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the USB insert off."""
         await self.coordinator.device.turn_off_usb_insert()
+        await self.coordinator.async_request_refresh()
+
+
+class SwidgetRtspSwitch(SwidgetEntity, SwitchEntity):
+    """Toggle the video insert's RTSP server."""
+
+    _attr_translation_key = "rtsp"
+    _attr_name = "RTSP"
+
+    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+        """Initialize the RTSP switch."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.device.mac_address}_rtsp"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the RTSP server is enabled, or None if unknown."""
+        return self.coordinator.device.rtsp_enabled
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable the RTSP server."""
+        await self.coordinator.device.set_rtsp_enabled(True)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable the RTSP server."""
+        await self.coordinator.device.set_rtsp_enabled(False)
         await self.coordinator.async_request_refresh()
