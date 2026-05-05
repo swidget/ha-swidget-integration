@@ -35,14 +35,17 @@ async def async_setup_entry(
             entities.append(
                 SwidgetComponentSensor(coordinator, assembly_key, component_id)
             )
-    # Active timer level (1-3) for any host component that exposes
-    # the 3-tier load timer.
+    # Active timer level (1-3) and human-readable mode for any host
+    # component that exposes the 3-tier load timer.
     host = coordinator.device.assemblies.get("host")
     if host is not None:
         for component_id, component in host.components.items():
             if "timer" in component.functions:
                 entities.append(
                     SwidgetTimerLevelSensor(coordinator, component_id)
+                )
+                entities.append(
+                    SwidgetTimerStatusSensor(coordinator, component_id)
                 )
     async_add_entities(entities)
 
@@ -157,6 +160,59 @@ class SwidgetTimerLevelSensor(SwidgetEntity, SensorEntity):
         if not isinstance(value, dict):
             return None
         return int(value.get("buttonLevel") or 0)
+
+
+class SwidgetTimerStatusSensor(SwidgetEntity, SensorEntity):
+    """Human-readable timer mode: "Off", "Timer N min", or "Permanent on".
+
+    Pairs with the Timer slider so the device page reads in plain
+    English at a glance, since the slider value alone (e.g. "255 min")
+    doesn't convey the force-on mode.
+    """
+
+    _attr_name = "Timer status"
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        """Initialize the timer-status sensor."""
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_timer_status"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return a plain-English description of the current timer mode."""
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get("timer")
+            )
+        except (KeyError, AttributeError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        if int(value.get("buttonLevel") or 0) == 255:
+            return "Permanent on"
+        minutes = int(value.get("buttonTimer") or 0)
+        if minutes > 0:
+            return f"Timer {minutes} min"
+        return "Off"
+
+    @property
+    def icon(self) -> str | None:
+        """Match the slider's icon vocabulary so the two read together."""
+        state = self.native_value
+        if state == "Permanent on":
+            return "mdi:infinity"
+        if state and state.startswith("Timer "):
+            return "mdi:timer-sand"
+        if state == "Off":
+            return "mdi:timer-off-outline"
+        return None
 
 
 class SwidgetComponentSensor(SwidgetEntity, SensorEntity):

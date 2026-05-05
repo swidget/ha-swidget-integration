@@ -107,6 +107,18 @@ class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
         return int(timer.get("buttonTimer") or 0)
 
     @property
+    def icon(self) -> str | None:
+        """Glanceable cue for the slider's current mode."""
+        value = self.native_value
+        if value is None:
+            return None
+        if value >= FORCE_ON_SENTINEL:
+            return "mdi:infinity"
+        if value > 0:
+            return "mdi:timer-sand"
+        return "mdi:timer-off-outline"
+
+    @property
     def available(self) -> bool:
         """Available once we've seen a valid timer state from the device."""
         return self._timer_state() is not None
