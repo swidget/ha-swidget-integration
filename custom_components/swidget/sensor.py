@@ -35,6 +35,15 @@ async def async_setup_entry(
             entities.append(
                 SwidgetComponentSensor(coordinator, assembly_key, component_id)
             )
+    # Active timer level (1-3) for any host component that exposes
+    # the 3-tier load timer.
+    host = coordinator.device.assemblies.get("host")
+    if host is not None:
+        for component_id, component in host.components.items():
+            if "timer" in component.functions:
+                entities.append(
+                    SwidgetTimerLevelSensor(coordinator, component_id)
+                )
     async_add_entities(entities)
 
 
@@ -111,6 +120,43 @@ class SwidgetInsertTypeSensor(SwidgetEntity, SensorEntity):
         return _assembly_type_label(
             self.coordinator, self.coordinator.device.insert_type, "insert"
         )
+
+
+class SwidgetTimerLevelSensor(SwidgetEntity, SensorEntity):
+    """Active timer level (1-3) reported by a host load timer.
+
+    Reads ``buttonLevel`` from the timer datapoint. Returns 0 when no
+    timer is running. Useful for automations that branch on which
+    preset is currently active.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Timer level"
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        """Initialize the timer-level sensor."""
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_timer_level"
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the active button-initiated timer level, or 0 if none."""
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get("timer")
+            )
+        except (KeyError, AttributeError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        return int(value.get("buttonLevel") or 0)
 
 
 class SwidgetComponentSensor(SwidgetEntity, SensorEntity):
