@@ -20,14 +20,22 @@ async def async_setup_entry(
 ) -> None:
     """Set up Swidget diagnostic sensors from a config entry."""
     coordinator: SwidgetDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            SwidgetHostTypeSensor(coordinator),
-            SwidgetInsertTypeSensor(coordinator),
-            SwidgetAssemblyComponentsSensor(coordinator, "host"),
-            SwidgetAssemblyComponentsSensor(coordinator, "insert"),
-        ]
-    )
+    entities: list[SensorEntity] = [
+        SwidgetHostTypeSensor(coordinator),
+        SwidgetInsertTypeSensor(coordinator),
+    ]
+    # One sensor per component on each assembly so the function list for
+    # each component is visible directly on the device page (the state)
+    # rather than buried under attributes.
+    for assembly_key in ("host", "insert"):
+        assembly = coordinator.device.assemblies.get(assembly_key)
+        if assembly is None:
+            continue
+        for component_id in assembly.components:
+            entities.append(
+                SwidgetComponentSensor(coordinator, assembly_key, component_id)
+            )
+    async_add_entities(entities)
 
 
 def _enum_value(value: object) -> str | None:
@@ -36,6 +44,26 @@ def _enum_value(value: object) -> str | None:
     if inner is None or inner == -1:
         return None
     return str(inner)
+
+
+def _assembly_type_label(
+    coordinator: SwidgetDataUpdateCoordinator,
+    enum_value: object,
+    assembly_key: str,
+) -> str | None:
+    """Resolve an assembly type label.
+
+    Prefer the SDK enum's friendly value; fall back to the raw string
+    the device sent so an SDK that's behind on a new firmware type
+    still surfaces something useful instead of "Unknown".
+    """
+    label = _enum_value(enum_value)
+    if label is not None:
+        return label
+    assembly = coordinator.device.assemblies.get(assembly_key)
+    if assembly is None:
+        return None
+    return getattr(assembly, "type", None) or None
 
 
 class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):
@@ -52,7 +80,9 @@ class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         """Return the host device type."""
-        return _enum_value(self.coordinator.device.device_type)
+        return _assembly_type_label(
+            self.coordinator, self.coordinator.device.device_type, "host"
+        )
 
 
 class SwidgetInsertTypeSensor(SwidgetEntity, SensorEntity):
@@ -69,40 +99,52 @@ class SwidgetInsertTypeSensor(SwidgetEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         """Return the insert type."""
-        return _enum_value(self.coordinator.device.insert_type)
+        return _assembly_type_label(
+            self.coordinator, self.coordinator.device.insert_type, "insert"
+        )
 
 
-class SwidgetAssemblyComponentsSensor(SwidgetEntity, SensorEntity):
-    """Per-assembly summary: component count plus per-component function lists in attributes."""
+class SwidgetComponentSensor(SwidgetEntity, SensorEntity):
+    """One per component: state is the comma-joined function names."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
-        self, coordinator: SwidgetDataUpdateCoordinator, assembly_key: str
+        self,
+        coordinator: SwidgetDataUpdateCoordinator,
+        assembly_key: str,
+        component_id: str,
     ) -> None:
-        """Initialize a per-assembly diagnostic sensor."""
+        """Initialize a single-component diagnostic sensor."""
         super().__init__(coordinator)
         self._assembly_key = assembly_key
-        self._attr_name = f"{assembly_key.capitalize()} components"
+        self._component_id = component_id
+        self._attr_name = f"{assembly_key.capitalize()} component {component_id}"
         self._attr_unique_id = (
-            f"{coordinator.device.mac_address}_{assembly_key}_components"
+            f"{coordinator.device.mac_address}_{assembly_key}_component_{component_id}"
         )
 
-    @property
-    def native_value(self) -> int | None:
-        """Return the number of components on this assembly."""
+    def _component(self):
         assembly = self.coordinator.device.assemblies.get(self._assembly_key)
         if assembly is None:
             return None
-        return len(assembly.components)
+        return assembly.components.get(self._component_id)
 
     @property
-    def extra_state_attributes(self) -> dict[str, list[str]] | None:
-        """Return per-component function names for inspection on the device page."""
-        assembly = self.coordinator.device.assemblies.get(self._assembly_key)
-        if assembly is None:
+    def native_value(self) -> str | None:
+        """Return the comma-joined function names for this component."""
+        component = self._component()
+        if component is None:
+            return None
+        names = sorted(component.functions.keys())
+        return ", ".join(names) if names else "(no functions)"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Expose function names plus their current values for inspection."""
+        component = self._component()
+        if component is None:
             return None
         return {
-            component_id: sorted(component.functions.keys())
-            for component_id, component in assembly.components.items()
+            "functions": dict(component.functions),
         }
