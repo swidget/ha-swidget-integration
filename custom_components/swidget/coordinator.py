@@ -24,12 +24,22 @@ def _structure_fingerprint(device: SwidgetDevice) -> tuple[Any, ...]:
     outlet), changing device_type, the insert, and the set of components
     on each assembly. We hash all of that into a tuple so we can compare
     successive summaries.
+
+    Critically the per-component signal is the summary's declared
+    function list, NOT ``component.functions.keys()``. Firmware emits
+    state-only keys (e.g. ``modules`` on FV05) that get merged into
+    ``functions`` by ``process_state`` and then dropped on the next
+    ``process_summary`` rebuild — which would flap the fingerprint
+    every poll cycle and reload the entry in a loop.
     """
     parts: list[Any] = []
     for key in sorted(device.assemblies):
         assembly = device.assemblies[key]
         component_sig = tuple(
-            (cid, tuple(sorted(component.functions.keys())))
+            (
+                cid,
+                tuple(sorted(getattr(component, "summary_functions", ()) or ())),
+            )
             for cid, component in sorted(assembly.components.items())
         )
         parts.append((key, getattr(assembly, "type", None), component_sig))

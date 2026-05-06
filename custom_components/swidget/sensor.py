@@ -252,10 +252,20 @@ async def async_setup_entry(
                     entities.append(
                         SwidgetInsertSensor(coordinator, component_id, description)
                     )
-    # Host-side fan sensors. Same gating: only materialise when the
-    # function appears in the host component's summary.
+    # Host-side fan sensors. Gated *both* on the host being a fan
+    # (exhaust/supply present) AND on the specific function being
+    # listed — the ``timer`` tag in particular is shared with the
+    # 3-tier load-timer hosts but with a different payload shape, so
+    # the function-presence check alone would mis-attach the
+    # ``Fan timer remaining`` sensor to a 20/40/60 timer switch.
     if host is not None:
         for component_id, component in host.components.items():
+            is_fan = (
+                "exhaust" in component.functions
+                or "supply" in component.functions
+            )
+            if not is_fan:
+                continue
             for description in HOST_FAN_SENSOR_DESCRIPTIONS:
                 if description.function in component.functions:
                     entities.append(
@@ -584,11 +594,17 @@ class SwidgetComponentSensor(SwidgetEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return the comma-joined function names for this component."""
+        """Return the comma-joined function names for this component.
+
+        Reads ``summary_functions`` rather than ``functions.keys()`` so
+        the value is the declared schema, not the runtime dict that
+        gets state-only keys merged in by ``process_state`` (and would
+        otherwise flap as those keys come and go on each summary rebuild).
+        """
         component = self._component()
         if component is None:
             return None
-        names = sorted(component.functions.keys())
+        names = sorted(getattr(component, "summary_functions", ()) or ())
         return ", ".join(names) if names else "(no functions)"
 
     @property

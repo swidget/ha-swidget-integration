@@ -132,6 +132,16 @@ async def async_setup_entry(
     host = device.assemblies.get("host")
     if host is not None:
         for component_id, component in host.components.items():
+            # All HOST_BINARY_SENSOR_DESCRIPTIONS are fan-only today —
+            # gate the whole loop on fan-ness (exhaust/supply presence)
+            # so future non-fan hosts that happen to share a function
+            # tag don't inherit the wrong reader.
+            is_fan = (
+                "exhaust" in component.functions
+                or "supply" in component.functions
+            )
+            if not is_fan:
+                continue
             # Module-triggered sensors are gated additionally on the
             # summary's ``modules`` list — only expose what the device
             # actually has installed, not every possible module name.
