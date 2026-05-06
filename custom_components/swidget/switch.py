@@ -31,7 +31,16 @@ async def async_setup_entry(
     entities: list[SwitchEntity] = []
 
     # Dimmers expose their on/off through the light platform instead.
-    if not device.is_dimmer:
+    # Fans don't have a host ``toggle`` at all — their on/off is the
+    # exhaust/supply CFM going to 0, surfaced via the fan platform.
+    # Gate on the ``toggle`` function being declared rather than on
+    # device family so we materialize the power switch exactly when
+    # the firmware will accept the ``toggle`` request.
+    host = device.assemblies.get("host")
+    has_toggle = host is not None and any(
+        "toggle" in component.functions for component in host.components.values()
+    )
+    if has_toggle and not device.is_dimmer:
         entities.append(SwidgetPowerSwitch(coordinator))
 
     if device.insert_type == InsertType.USB:
