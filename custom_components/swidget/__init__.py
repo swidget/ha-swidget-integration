@@ -114,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         model_id=device.model,
         serial_number=device.mac_address,
         sw_version=device.version,
+        configuration_url=f"{device.uri_scheme}://{device.ip_address}",
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
