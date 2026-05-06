@@ -19,6 +19,7 @@ from .const import (
     CONF_USE_HTTPS,
     DOMAIN,
     PLATFORMS,
+    friendly_host_model,
 )
 from .coordinator import SwidgetDataUpdateCoordinator
 
@@ -104,7 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(device.mac_address))},
         manufacturer="Swidget",
         name=device.friendly_name,
-        model="Swidget WiFi Insert",
+        model=friendly_host_model(device.device_type, device.insert_type),
         model_id=device.model,
         sw_version=device.version,
     )

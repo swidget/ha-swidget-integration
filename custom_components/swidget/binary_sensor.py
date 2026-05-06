@@ -19,6 +19,22 @@ from .entity import SwidgetEntity
 
 
 @dataclass(frozen=True, kw_only=True)
+class SwidgetHostBinarySensorDescription(BinarySensorEntityDescription):
+    """Description for a host-component binary sensor.
+
+    Two reader styles to cover the fan datapoint shapes:
+    - ``mode == "field"`` (default) reads ``state[field]`` as a bool.
+    - ``mode == "modules_triggered"`` reads ``state[field]`` as a string
+      (``"triggered"`` / ``"dormant"``) and reports True iff
+      ``"triggered"``. Used for the per-module map under ``modules``.
+    """
+
+    function: str
+    field: str
+    reader: str = "field"
+
+
+@dataclass(frozen=True, kw_only=True)
 class SwidgetInsertBinarySensorDescription(BinarySensorEntityDescription):
     """Description for a binary sensor that reads one bool field on an insert function.
 
@@ -52,6 +68,46 @@ INSERT_BINARY_SENSOR_DESCRIPTIONS: tuple[
 )
 
 
+# Host-side binary sensors. The fan ``filter`` payload carries two
+# bool fields directly; the ``modules`` payload is a string-valued map
+# (``"triggered"`` / ``"dormant"``) keyed by add-on module name, so we
+# expose one binary sensor per detected module string.
+HOST_BINARY_SENSOR_DESCRIPTIONS: tuple[
+    SwidgetHostBinarySensorDescription, ...
+] = (
+    SwidgetHostBinarySensorDescription(
+        key="filter_needs_cleaning",
+        function="filter",
+        field="needsCleaning",
+        name="Filter needs cleaning",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    SwidgetHostBinarySensorDescription(
+        key="filter_needs_replacement",
+        function="filter",
+        field="needsReplacement",
+        name="Filter needs replacement",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    SwidgetHostBinarySensorDescription(
+        key="condensation_module",
+        function="modules",
+        field="condensation",
+        reader="modules_triggered",
+        name="Condensation triggered",
+        device_class=BinarySensorDeviceClass.MOISTURE,
+    ),
+    SwidgetHostBinarySensorDescription(
+        key="motion_module",
+        function="modules",
+        field="motion",
+        reader="modules_triggered",
+        name="Motion module triggered",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -72,6 +128,25 @@ async def async_setup_entry(
                             coordinator, component_id, description
                         )
                     )
+
+    host = device.assemblies.get("host")
+    if host is not None:
+        for component_id, component in host.components.items():
+            # Module-triggered sensors are gated additionally on the
+            # summary's ``modules`` list — only expose what the device
+            # actually has installed, not every possible module name.
+            installed_modules = set(getattr(component, "modules", []) or [])
+            for description in HOST_BINARY_SENSOR_DESCRIPTIONS:
+                if description.function not in component.functions:
+                    continue
+                if (
+                    description.reader == "modules_triggered"
+                    and description.field not in installed_modules
+                ):
+                    continue
+                entities.append(
+                    SwidgetHostBinarySensor(coordinator, component_id, description)
+                )
 
     async_add_entities(entities)
 
@@ -134,3 +209,43 @@ class SwidgetInsertBinarySensor(SwidgetEntity, BinarySensorEntity):
             if value is not None:
                 attrs[attr_name] = value
         return attrs or None
+
+
+class SwidgetHostBinarySensor(SwidgetEntity, BinarySensorEntity):
+    """Generic host-component binary sensor."""
+
+    entity_description: SwidgetHostBinarySensorDescription
+
+    def __init__(
+        self,
+        coordinator: SwidgetDataUpdateCoordinator,
+        component_id: str,
+        description: SwidgetHostBinarySensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_{description.key}"
+        )
+
+    def _function_state(self) -> dict | None:
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get(self.entity_description.function)
+            )
+        except (KeyError, AttributeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._function_state()
+        if state is None:
+            return None
+        raw = state.get(self.entity_description.field)
+        if self.entity_description.reader == "modules_triggered":
+            return raw == "triggered" if isinstance(raw, str) else None
+        return raw if isinstance(raw, bool) else None

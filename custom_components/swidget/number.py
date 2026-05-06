@@ -32,14 +32,28 @@ async def async_setup_entry(
     entities: list[NumberEntity] = []
     host = device.assemblies.get("host")
     if host is not None:
-        # Per SDK request_handling.md, the 3-tier host load timer is
-        # available on any component whose "functions" includes "timer".
-        # Don't gate on device_type — keeps us correct if firmware
-        # exposes the function on a non-TimerSwitch host.
         for component_id, component in host.components.items():
+            # The 3-tier load timer and the fan timer share the
+            # ``timer`` tag but use different request shapes. Pick by
+            # whether airflow functions are present — fans always
+            # expose at least one of exhaust/supply.
+            is_fan = (
+                "exhaust" in component.functions or "supply" in component.functions
+            )
             if "timer" in component.functions:
+                if is_fan:
+                    entities.append(
+                        SwidgetFanTimerNumber(coordinator, component_id)
+                    )
+                else:
+                    entities.append(
+                        SwidgetTimerDurationNumber(coordinator, component_id)
+                    )
+            if "boost" in component.functions:
+                entities.append(SwidgetFanBoostNumber(coordinator, component_id))
+            if "dutyCycle" in component.functions:
                 entities.append(
-                    SwidgetTimerDurationNumber(coordinator, component_id)
+                    SwidgetFanDutyCycleNumber(coordinator, component_id)
                 )
 
     async_add_entities(entities)
@@ -148,5 +162,238 @@ class SwidgetTimerDurationNumber(SwidgetEntity, NumberEntity):
             component=self._component_id,
             function="timer",
             command=command,
+        )
+        await self.coordinator.async_request_refresh()
+
+
+# Fan boost ``minutes`` is a uint8_t in firmware (see
+# ``component.cpp::1023``), so 255 is the natural "permanent boost"
+# sentinel — map the slider's rightmost position to ``mode: "on"``
+# rather than a long-but-finite timer.
+_FAN_BOOST_PERMANENT = 255
+
+
+class SwidgetFanBoostNumber(SwidgetEntity, NumberEntity):
+    """Combined boost slider for Pesna fans.
+
+    Slider semantics mirror the existing host-timer slider:
+      * 0 — turn boost off (sends ``{"mode": "off"}``)
+      * 1..254 — start a boost timer for N minutes
+        (sends ``{"mode": "timer", "minutes": N}``)
+      * 255 — permanent boost (sends ``{"mode": "on"}``)
+
+    The device reports back ``boost.mode`` plus an optional
+    ``boost.minutes`` (only while a timer is running), which we
+    translate back into a slider position.
+    """
+
+    _attr_name = "Boost"
+    _attr_translation_key = "fan_boost"
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_min_value = 0
+    _attr_native_max_value = _FAN_BOOST_PERMANENT
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_fan_boost"
+        )
+
+    def _boost_state(self) -> dict | None:
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get("boost")
+            )
+        except (KeyError, AttributeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @property
+    def available(self) -> bool:
+        return self._boost_state() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        boost = self._boost_state()
+        if boost is None:
+            return None
+        mode = boost.get("mode")
+        if mode == "on":
+            return _FAN_BOOST_PERMANENT
+        if mode == "timer":
+            try:
+                return int(boost.get("minutes") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    @property
+    def icon(self) -> str | None:
+        value = self.native_value
+        if value is None:
+            return None
+        if value >= _FAN_BOOST_PERMANENT:
+            return "mdi:fan-plus"
+        if value > 0:
+            return "mdi:timer-sand"
+        return "mdi:fan-off"
+
+    async def async_set_native_value(self, value: float) -> None:
+        target = int(value)
+        if target >= _FAN_BOOST_PERMANENT:
+            command: dict = {"mode": "on"}
+        elif target <= 0:
+            command = {"mode": "off"}
+        else:
+            command = {"mode": "timer", "minutes": target}
+        await self.coordinator.device.send_command(
+            assembly="host",
+            component=self._component_id,
+            function="boost",
+            command=command,
+        )
+        await self.coordinator.async_request_refresh()
+
+
+# Fan timer minutes is also a uint8_t, but a permanent-on sentinel
+# isn't meaningful here (use the boost slider for that). Cap at 254
+# so the slider's rightmost position is still a real timer value.
+_FAN_TIMER_MAX = 254
+
+
+class SwidgetFanTimerNumber(SwidgetEntity, NumberEntity):
+    """Custom-timer override slider for Pesna fans.
+
+    The fan ``timer`` request shape (``{"minutes": N}``) is *different*
+    from the host load-timer's three-tier shape, which is why we route
+    by host kind in setup. Setting 0 cancels the override; otherwise
+    the device runs at its current speed for N minutes.
+    """
+
+    _attr_name = "Fan timer"
+    _attr_translation_key = "fan_timer"
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_min_value = 0
+    _attr_native_max_value = _FAN_TIMER_MAX
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_fan_timer"
+        )
+
+    def _timer_state(self) -> dict | None:
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get("timer")
+            )
+        except (KeyError, AttributeError):
+            return None
+        # Per the datapoint spec, ``timer`` is omitted entirely when no
+        # fan timer is active — treat that as "0 minutes remaining".
+        return value if isinstance(value, dict) else None
+
+    @property
+    def native_value(self) -> float | None:
+        timer = self._timer_state()
+        if timer is None:
+            return 0
+        try:
+            return int(timer.get("minutes") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def icon(self) -> str | None:
+        value = self.native_value
+        if value and value > 0:
+            return "mdi:timer-sand"
+        return "mdi:timer-off-outline"
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.device.send_command(
+            assembly="host",
+            component=self._component_id,
+            function="timer",
+            command={"minutes": int(value)},
+        )
+        await self.coordinator.async_request_refresh()
+
+
+# Duty cycle is minutes-per-hour, so a sensible cap is 60. Firmware
+# accepts a wider int range (see component.cpp::954) but >60 has no
+# physical meaning.
+_DUTY_CYCLE_MAX = 60
+
+
+class SwidgetFanDutyCycleNumber(SwidgetEntity, NumberEntity):
+    """Minutes-per-hour duty cycle for Pesna fans.
+
+    Useful on continuous-ventilation modes where the fan runs only N
+    minutes out of every 60 instead of full-time.
+    """
+
+    _attr_name = "Duty cycle"
+    _attr_translation_key = "fan_duty_cycle"
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_min_value = 0
+    _attr_native_max_value = _DUTY_CYCLE_MAX
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_duty_cycle"
+        )
+
+    def _duty_state(self) -> dict | None:
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get("dutyCycle")
+            )
+        except (KeyError, AttributeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @property
+    def available(self) -> bool:
+        return self._duty_state() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        duty = self._duty_state()
+        if duty is None:
+            return None
+        try:
+            return int(duty.get("minutes") or 0)
+        except (TypeError, ValueError):
+            return None
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.device.send_command(
+            assembly="host",
+            component=self._component_id,
+            function="dutyCycle",
+            command={"minutes": int(value)},
         )
         await self.coordinator.async_request_refresh()

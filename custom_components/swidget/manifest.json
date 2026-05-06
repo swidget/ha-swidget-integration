@@ -8,7 +8,7 @@
   "config_flow": true,
   "iot_class": "local_push",
   "integration_type": "device",
-  "requirements": ["python-swidget==1.4.15"],
+  "requirements": ["python-swidget==1.4.16"],
   "dependencies": ["ssdp", "stream"],
   "ssdp": [
     {

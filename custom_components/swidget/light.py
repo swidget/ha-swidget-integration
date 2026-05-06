@@ -35,6 +35,10 @@ async def async_setup_entry(
         for component_id, component in host.components.items():
             if "level" in component.functions:
                 entities.append(SwidgetDimmerLight(coordinator, component_id))
+            # The Pesna fans expose an integrated bath light via the
+            # host-level ``light`` function — purely on/off, no dimming.
+            if "light" in component.functions:
+                entities.append(SwidgetFanLight(coordinator, component_id))
 
     async_add_entities(entities)
 
@@ -115,4 +119,64 @@ class SwidgetDimmerLight(SwidgetEntity, LightEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the dimmer."""
         await self.coordinator.device.turn_off()
+        await self.coordinator.async_request_refresh()
+
+
+class SwidgetFanLight(SwidgetEntity, LightEntity):
+    """The integrated light on a Pesna bath-fan host (on/off only)."""
+
+    _attr_name = "Light"
+    _attr_color_mode = ColorMode.ONOFF
+    _attr_supported_color_modes = {ColorMode.ONOFF}
+    _attr_translation_key = "fan_light"
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        """Initialize the fan light entity."""
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_fan_light"
+        )
+
+    def _light_state(self) -> dict | None:
+        try:
+            value = (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get("light")
+            )
+        except (KeyError, AttributeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @property
+    def available(self) -> bool:
+        return self._light_state() is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._light_state()
+        if state is None:
+            return None
+        value = state.get("on")
+        return value if isinstance(value, bool) else None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.device.send_command(
+            assembly="host",
+            component=self._component_id,
+            function="light",
+            command={"on": True},
+        )
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.device.send_command(
+            assembly="host",
+            component=self._component_id,
+            function="light",
+            command={"on": False},
+        )
         await self.coordinator.async_request_refresh()

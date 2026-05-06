@@ -35,6 +35,10 @@ def _device_snapshot(coordinator: SwidgetDataUpdateCoordinator) -> dict[str, Any
                         name: value
                         for name, value in component.functions.items()
                     },
+                    # Summary-level fan extras (None / [] on non-fan hosts).
+                    "max_cfm": getattr(component, "max_cfm", None),
+                    "model_code": getattr(component, "model_code", None),
+                    "modules": list(getattr(component, "modules", []) or []),
                 }
                 for component_id, component in assembly.components.items()
             },

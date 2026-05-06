@@ -6,7 +6,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, friendly_host_model
 from .coordinator import SwidgetDataUpdateCoordinator
 
 
@@ -24,7 +24,7 @@ class SwidgetEntity(CoordinatorEntity[SwidgetDataUpdateCoordinator]):
             connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(device.mac_address))},
             manufacturer="Swidget",
             name=device.friendly_name,
-            model="Swidget WiFi Insert",
+            model=friendly_host_model(device.device_type, device.insert_type),
             model_id=device.model,
             sw_version=device.version,
         )

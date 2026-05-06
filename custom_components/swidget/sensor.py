@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime, UnitOfVolumeFlowRate
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,6 +33,21 @@ class SwidgetInsertSensorDescription(SensorEntityDescription):
 
     function: str
     field: str = "now"
+
+
+@dataclass(frozen=True, kw_only=True)
+class SwidgetHostSensorDescription(SensorEntityDescription):
+    """Description for a sensor reading a host-component function.
+
+    Mirrors ``SwidgetInsertSensorDescription`` but targets host-side
+    functions (the fan-only ``mode``/``status``/``speed``/``indoors``/
+    ``outdoors``/``boost``/``dutyCycle``/``error`` set). ``field`` is
+    optional — when the function value is a bare scalar (e.g. ``mode``
+    is reported as ``"continuous"`` directly), set ``field=None``.
+    """
+
+    function: str
+    field: str | None = "now"
 
 
 # Catalogue of insert measurement sensors. New sensors usually require
@@ -60,6 +75,131 @@ INSERT_SENSOR_DESCRIPTIONS: tuple[SwidgetInsertSensorDescription, ...] = (
 )
 
 
+# Host-side fan sensors. Each entry materialises only when the function
+# tag appears in the host component's summary, so non-fan hosts don't
+# get any of these. ``field=None`` denotes a function whose datapoint
+# is a bare scalar (``mode``/``status``/``speed``).
+HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
+    SwidgetHostSensorDescription(
+        key="fan_mode",
+        function="mode",
+        field=None,
+        name="Mode",
+    ),
+    SwidgetHostSensorDescription(
+        key="fan_status",
+        function="status",
+        field=None,
+        name="Status",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SwidgetHostSensorDescription(
+        key="fan_speed",
+        function="speed",
+        field=None,
+        name="Speed",
+    ),
+    SwidgetHostSensorDescription(
+        key="fan_error",
+        function="error",
+        field="code",
+        name="Error",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SwidgetHostSensorDescription(
+        key="exhaust_cfm",
+        function="exhaust",
+        field="cfm",
+        name="Exhaust CFM",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfVolumeFlowRate.CUBIC_FEET_PER_MINUTE,
+    ),
+    SwidgetHostSensorDescription(
+        key="supply_cfm",
+        function="supply",
+        field="cfm",
+        name="Supply CFM",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfVolumeFlowRate.CUBIC_FEET_PER_MINUTE,
+    ),
+    SwidgetHostSensorDescription(
+        key="indoor_temperature",
+        function="indoors",
+        field="temperature",
+        name="Indoor temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+    ),
+    SwidgetHostSensorDescription(
+        key="indoor_humidity",
+        function="indoors",
+        field="humidity",
+        name="Indoor humidity",
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=1,
+    ),
+    SwidgetHostSensorDescription(
+        key="outdoor_temperature",
+        function="outdoors",
+        field="temperature",
+        name="Outdoor temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+    ),
+    SwidgetHostSensorDescription(
+        key="outdoor_humidity",
+        function="outdoors",
+        field="humidity",
+        name="Outdoor humidity",
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=1,
+    ),
+    SwidgetHostSensorDescription(
+        key="duty_cycle",
+        function="dutyCycle",
+        field="minutes",
+        name="Duty cycle",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+    ),
+    SwidgetHostSensorDescription(
+        key="fan_timer_remaining",
+        function="timer",
+        field="minutes",
+        name="Fan timer remaining",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+    ),
+    SwidgetHostSensorDescription(
+        key="boost_remaining",
+        function="boost",
+        field="minutes",
+        name="Boost remaining",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+    ),
+    SwidgetHostSensorDescription(
+        key="boost_mode",
+        function="boost",
+        field="mode",
+        name="Boost mode",
+    ),
+    SwidgetHostSensorDescription(
+        key="balancing_offset",
+        function="balancing",
+        field="offset",
+        name="Balancing offset",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -83,11 +223,18 @@ async def async_setup_entry(
                 SwidgetComponentSensor(coordinator, assembly_key, component_id)
             )
     # Active timer level (1-3) and human-readable mode for any host
-    # component that exposes the 3-tier load timer.
+    # component that exposes the 3-tier load timer. Skip fan hosts —
+    # they share the ``timer`` tag but with a different (single
+    # ``minutes`` field) shape, surfaced via the fan-specific
+    # ``fan_timer_remaining`` sensor / ``Fan timer`` slider instead.
     host = coordinator.device.assemblies.get("host")
     if host is not None:
         for component_id, component in host.components.items():
-            if "timer" in component.functions:
+            is_fan = (
+                "exhaust" in component.functions
+                or "supply" in component.functions
+            )
+            if "timer" in component.functions and not is_fan:
                 entities.append(
                     SwidgetTimerLevelSensor(coordinator, component_id)
                 )
@@ -104,6 +251,17 @@ async def async_setup_entry(
                 if description.function in component.functions:
                     entities.append(
                         SwidgetInsertSensor(coordinator, component_id, description)
+                    )
+    # Host-side fan sensors. Same gating: only materialise when the
+    # function appears in the host component's summary.
+    if host is not None:
+        for component_id, component in host.components.items():
+            for description in HOST_FAN_SENSOR_DESCRIPTIONS:
+                if description.function in component.functions:
+                    entities.append(
+                        SwidgetHostFunctionSensor(
+                            coordinator, component_id, description
+                        )
                     )
     async_add_entities(entities)
 
@@ -199,6 +357,65 @@ class SwidgetInsertSensor(SwidgetEntity, SensorEntity):
             return None
         if isinstance(value, (int, float, str)):
             return value
+        return None
+
+
+class SwidgetHostFunctionSensor(SwidgetEntity, SensorEntity):
+    """Generic host-component sensor driven by SwidgetHostSensorDescription.
+
+    Supports two payload shapes: nested (function value is a dict and
+    the sensor reads ``description.field`` from it) and bare (function
+    value is the scalar itself; ``description.field`` is ``None``). The
+    fan-only ``mode``/``status``/``speed`` tags use the bare form per
+    the SDK datapoint spec.
+    """
+
+    entity_description: SwidgetHostSensorDescription
+
+    def __init__(
+        self,
+        coordinator: SwidgetDataUpdateCoordinator,
+        component_id: str,
+        description: SwidgetHostSensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_{description.key}"
+        )
+
+    def _function_value(self) -> object | None:
+        try:
+            return (
+                self.coordinator.device.assemblies["host"]
+                .components[self._component_id]
+                .functions.get(self.entity_description.function)
+            )
+        except (KeyError, AttributeError):
+            return None
+
+    @property
+    def available(self) -> bool:
+        return self._function_value() is not None
+
+    @property
+    def native_value(self) -> float | int | str | None:
+        value = self._function_value()
+        if value is None:
+            return None
+        if self.entity_description.field is None:
+            # Bare-scalar functions (mode/status/speed) report directly.
+            if isinstance(value, bool):
+                return None
+            return value if isinstance(value, (int, float, str)) else None
+        if not isinstance(value, dict):
+            return None
+        field_value = value.get(self.entity_description.field)
+        if field_value is None or isinstance(field_value, bool):
+            return None
+        if isinstance(field_value, (int, float, str)):
+            return field_value
         return None
 
 
