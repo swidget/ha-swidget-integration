@@ -99,14 +99,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register the device once at setup so platforms can reference it
     # via identifiers without each one duplicating the metadata.
     device_registry = dr.async_get(hass)
+    # ``device.mac_address`` is the firmware's ``summary["mac"]``, which
+    # is semantically a device id (it just happens to equal the network
+    # MAC on pico-class hardware — not on video). Surface it under
+    # ``serial_number`` so the device-info card labels it correctly
+    # rather than under CONNECTION_NETWORK_MAC, which would mislabel it
+    # as a MAC.
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, device.mac_address)},
-        connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(device.mac_address))},
         manufacturer="Swidget",
         name=device.friendly_name,
         model=friendly_host_model(device.device_type, device.insert_type),
         model_id=device.model,
+        serial_number=device.mac_address,
         sw_version=device.version,
     )
 

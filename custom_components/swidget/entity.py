@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -19,12 +18,15 @@ class SwidgetEntity(CoordinatorEntity[SwidgetDataUpdateCoordinator]):
         """Initialize the entity."""
         super().__init__(coordinator)
         device = coordinator.device
+        # See note in __init__.async_setup_entry: ``mac_address`` is the
+        # device id, not a network MAC. Surfaced via ``serial_number``
+        # so HA labels it correctly on the device-info card.
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.mac_address)},
-            connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(device.mac_address))},
             manufacturer="Swidget",
             name=device.friendly_name,
             model=friendly_host_model(device.device_type, device.insert_type),
             model_id=device.model,
+            serial_number=device.mac_address,
             sw_version=device.version,
         )
