@@ -48,6 +48,13 @@ class SwidgetHostSensorDescription(SensorEntityDescription):
 
     function: str
     field: str | None = "now"
+    # What to report when the underlying field is absent. Several fan
+    # fields are firmware-omitted when "nothing is happening"
+    # (``boost.minutes`` only while a boost timer runs, the entire
+    # ``timer`` object only while a fan timer is armed, ``error.code``
+    # only while there is an error). Setting a default here lets the
+    # entity surface a meaningful resting value instead of "Unknown".
+    default_value: float | int | str | None = None
 
 
 # Catalogue of insert measurement sensors. New sensors usually require
@@ -105,6 +112,7 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         field="code",
         name="Error",
         entity_category=EntityCategory.DIAGNOSTIC,
+        default_value="OK",
     ),
     SwidgetHostSensorDescription(
         key="exhaust_cfm",
@@ -176,6 +184,7 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         field="minutes",
         name="Fan timer remaining",
         native_unit_of_measurement=UnitOfTime.MINUTES,
+        default_value=0,
     ),
     SwidgetHostSensorDescription(
         key="boost_remaining",
@@ -183,6 +192,7 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         field="minutes",
         name="Boost remaining",
         native_unit_of_measurement=UnitOfTime.MINUTES,
+        default_value=0,
     ),
     SwidgetHostSensorDescription(
         key="boost_mode",
@@ -407,26 +417,35 @@ class SwidgetHostFunctionSensor(SwidgetEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
+        # When the description supplies a default we're always able to
+        # report *something* (the default), even if the firmware has
+        # omitted the function or field — surface that as available so
+        # the card doesn't show "Unavailable" for a normal resting state.
+        if self.entity_description.default_value is not None:
+            return True
         return self._function_value() is not None
 
     @property
     def native_value(self) -> float | int | str | None:
+        default = self.entity_description.default_value
         value = self._function_value()
         if value is None:
-            return None
+            return default
         if self.entity_description.field is None:
             # Bare-scalar functions (mode/status/speed) report directly.
             if isinstance(value, bool):
-                return None
-            return value if isinstance(value, (int, float, str)) else None
+                return default
+            if isinstance(value, (int, float, str)):
+                return value
+            return default
         if not isinstance(value, dict):
-            return None
+            return default
         field_value = value.get(self.entity_description.field)
         if field_value is None or isinstance(field_value, bool):
-            return None
+            return default
         if isinstance(field_value, (int, float, str)):
             return field_value
-        return None
+        return default
 
 
 class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):
