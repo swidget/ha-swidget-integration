@@ -25,7 +25,14 @@ async def async_setup_entry(
     host = device.assemblies.get("host")
     if host is not None:
         for component_id, component in host.components.items():
-            if "timer" in component.functions:
+            # Skip fans: the ``timer`` tag exists on Pesna fans too
+            # but with the ``{"minutes": N}`` shape — there's no
+            # 1->2->3 advance concept, so the button would do nothing.
+            is_fan = (
+                "exhaust" in component.functions
+                or "supply" in component.functions
+            )
+            if "timer" in component.functions and not is_fan:
                 entities.append(
                     SwidgetTimerAdvanceButton(coordinator, component_id)
                 )
