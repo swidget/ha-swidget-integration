@@ -577,7 +577,22 @@ class SwidgetHostFunctionSensor(SwidgetEntity, SensorEntity):
         # the card doesn't show "Unavailable" for a normal resting state.
         if self.entity_description.default_value is not None:
             return True
-        return self._function_value() is not None
+        value = self._function_value()
+        if value is None:
+            return False
+        # Bare-scalar readers (field is None) are "available" as long as
+        # we have any value at all — the value itself is the reading.
+        if self.entity_description.field is None:
+            return True
+        # Field readers need the field to actually exist in the function
+        # dict. The firmware can ship an empty function payload (e.g. the
+        # uncontrolled-outlet power dict on duplex outlets without
+        # measurement on socket 1) — surface that as Unavailable rather
+        # than Unknown so the device card honestly conveys "no reading"
+        # instead of "stale value".
+        if not isinstance(value, dict):
+            return False
+        return value.get(self.entity_description.field) is not None
 
     @property
     def native_value(self) -> float | int | str | None:
