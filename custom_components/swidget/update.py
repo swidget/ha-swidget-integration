@@ -17,6 +17,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN
 from .coordinator import SwidgetDataUpdateCoordinator
@@ -54,16 +55,24 @@ async def async_setup_entry(
     # Probe once so we don't permanently attach a broken entity to
     # legacy firmware that doesn't expose /api/v1/update. ``check_for_
     # updates`` raises SwidgetException on any HTTP error (including
-    # 404), which is exactly the signal we want.
+    # 404), which is exactly the signal we want. We also keep the
+    # response and seed the entity with it, so users see fresh state
+    # immediately on (re)load instead of waiting a full SCAN_INTERVAL.
     try:
-        await coordinator.device.check_for_updates()
+        initial_versions = await coordinator.device.check_for_updates()
     except SwidgetException:
         _LOGGER.debug(
             "Skipping update entity for %s; device did not answer /api/v1/update",
             coordinator.device.ip_address,
         )
         return
-    async_add_entities([SwidgetUpdateEntity(coordinator)])
+    _LOGGER.info(
+        "Swidget %s firmware probe: installed=%s available=%s",
+        coordinator.device.ip_address,
+        getattr(coordinator.device, "version", None),
+        initial_versions,
+    )
+    async_add_entities([SwidgetUpdateEntity(coordinator, initial_versions)])
 
 
 class SwidgetUpdateEntity(SwidgetEntity, UpdateEntity):
@@ -80,20 +89,38 @@ class SwidgetUpdateEntity(SwidgetEntity, UpdateEntity):
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL | UpdateEntityFeature.SPECIFIC_VERSION
     )
-    # CoordinatorEntity sets ``should_poll = False`` as a class attribute
-    # (which shadows the Entity property that reads ``_attr_should_poll``),
-    # so the only way to opt back into HA's own polling is to override
-    # the class attribute itself. Our update check has its own
-    # SCAN_INTERVAL — much rarer than the coordinator tick — so we want
-    # HA to call ``async_update`` directly rather than piggyback on the
-    # coordinator.
-    should_poll = True
+    # We drive the firmware check ourselves on a timer registered in
+    # ``async_added_to_hass`` (and again when the user hits Refresh,
+    # which routes to ``async_update``). HA's platform polling is
+    # disabled — letting the CoordinatorEntity defaults stand — because
+    # the parent class's ``async_update`` would otherwise short-circuit
+    # to ``coordinator.async_request_refresh`` and never run our check.
 
-    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+    def __init__(
+        self,
+        coordinator: SwidgetDataUpdateCoordinator,
+        initial_versions: list[str] | None = None,
+    ) -> None:
         """Initialize the update entity."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.device.mac_address}_firmware"
-        self._available_versions: list[str] = []
+        self._available_versions: list[str] = [
+            v for v in (initial_versions or []) if isinstance(v, str)
+        ]
+
+    async def async_added_to_hass(self) -> None:
+        """Wire up the periodic firmware-check timer."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, self._async_scheduled_refresh, SCAN_INTERVAL
+            )
+        )
+
+    async def _async_scheduled_refresh(self, _now: Any) -> None:
+        """Timer callback: refresh and write state."""
+        await self._async_refresh_versions()
+        self.async_write_ha_state()
 
     @property
     def installed_version(self) -> str | None:
@@ -118,8 +145,13 @@ class SwidgetUpdateEntity(SwidgetEntity, UpdateEntity):
         return self._available_versions[-1]
 
     async def async_update(self) -> None:
-        """Refresh the available-versions array from the device."""
+        """Refresh on demand (homeassistant.update_entity service / refresh button)."""
+        await self._async_refresh_versions()
+
+    async def _async_refresh_versions(self) -> None:
+        """Hit /api/v1/update and stash the resulting list."""
         ip = getattr(self.coordinator.device, "ip_address", "?")
+        _LOGGER.info("Swidget %s firmware check: requesting /api/v1/update", ip)
         try:
             versions = await self.coordinator.device.check_for_updates()
         except SwidgetException as err:
@@ -129,7 +161,7 @@ class SwidgetUpdateEntity(SwidgetEntity, UpdateEntity):
         # a plain list so latest_version can do its own semver sort.
         self._available_versions = [v for v in versions if isinstance(v, str)]
         _LOGGER.info(
-            "Swidget %s update check: installed=%s available=%s -> latest=%s",
+            "Swidget %s firmware check: installed=%s available=%s -> latest=%s",
             ip,
             self.installed_version,
             self._available_versions,
