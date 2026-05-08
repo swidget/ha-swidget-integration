@@ -65,6 +65,35 @@ INSERT_BINARY_SENSOR_DESCRIPTIONS: tuple[
         device_class=BinarySensorDeviceClass.MOTION,
         attribute_fields=(("seconds_in_state", "secondsInState"),),
     ),
+    # Water detector. ``state`` is leak presence (MOISTURE);
+    # ``connected`` is cable health (CONNECTIVITY — ON when the probe
+    # cable is plugged in and reading). Both come from the same
+    # ``water`` function and live on the same insert component, so the
+    # existing setup loop materialises them together.
+    SwidgetInsertBinarySensorDescription(
+        key="water_leak",
+        function="water",
+        field="state",
+        name="Water leak",
+        device_class=BinarySensorDeviceClass.MOISTURE,
+        attribute_fields=(("seconds_in_state", "secondsInState"),),
+    ),
+    SwidgetInsertBinarySensorDescription(
+        key="water_cable",
+        function="water",
+        field="connected",
+        name="Water sensor cable",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+    ),
+    # Distance / proximity insert. ``detected`` is the bool presence
+    # signal; the distance reading is surfaced as a sensor below.
+    SwidgetInsertBinarySensorDescription(
+        key="proximity_detected",
+        function="proximity",
+        field="detected",
+        name="Object detected",
+        device_class=BinarySensorDeviceClass.OCCUPANCY,
+    ),
 )
 
 

@@ -11,7 +11,19 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime, UnitOfVolumeFlowRate
+from homeassistant.const import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    CONCENTRATION_PARTS_PER_BILLION,
+    CONCENTRATION_PARTS_PER_MILLION,
+    PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+    UnitOfLength,
+    UnitOfPower,
+    UnitOfPressure,
+    UnitOfTemperature,
+    UnitOfTime,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -78,6 +90,94 @@ INSERT_SENSOR_DESCRIPTIONS: tuple[SwidgetInsertSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=PERCENTAGE,
         suggested_display_precision=1,
+    ),
+    # AIR QUALITY insert — ``aq`` component carries iaq/eco2/tvoc; the
+    # companion ``pressure`` component carries ``bp``. The IAQ index is
+    # the Bosch BSEC scale (0–500), which doesn't quite match HA's AQI
+    # device class semantics, so we leave its device_class unset.
+    SwidgetInsertSensorDescription(
+        key="iaq",
+        function="iaq",
+        name="Air quality index",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+    ),
+    SwidgetInsertSensorDescription(
+        key="eco2",
+        function="eco2",
+        name="Equivalent CO2",
+        device_class=SensorDeviceClass.CO2,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+    ),
+    SwidgetInsertSensorDescription(
+        key="tvoc",
+        function="tvoc",
+        name="TVOC",
+        device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=CONCENTRATION_PARTS_PER_BILLION,
+    ),
+    SwidgetInsertSensorDescription(
+        key="pressure",
+        function="bp",
+        name="Pressure",
+        device_class=SensorDeviceClass.PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPressure.HPA,
+        suggested_display_precision=1,
+    ),
+    # CO2 / PM inserts use ``conc`` rather than ``now`` for the primary
+    # reading. Each also reports a ``qual`` integer grade — not surfaced
+    # as a separate entity for now to keep the sensor count manageable.
+    SwidgetInsertSensorDescription(
+        key="co2",
+        function="co2",
+        field="conc",
+        name="CO2",
+        device_class=SensorDeviceClass.CO2,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+    ),
+    SwidgetInsertSensorDescription(
+        key="pm1_0",
+        function="pm1_0",
+        field="conc",
+        name="PM1.0",
+        device_class=SensorDeviceClass.PM1,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    ),
+    SwidgetInsertSensorDescription(
+        key="pm2_5",
+        function="pm2_5",
+        field="conc",
+        name="PM2.5",
+        device_class=SensorDeviceClass.PM25,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    ),
+    SwidgetInsertSensorDescription(
+        key="pm10",
+        function="pm10",
+        field="conc",
+        name="PM10",
+        device_class=SensorDeviceClass.PM10,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    ),
+    # Distance / proximity insert. ``distance`` is only emitted while
+    # ``detected`` is true, so the sensor will show "Unknown" between
+    # detections — the binary sensor for ``detected`` is the right
+    # signal for "is something there".
+    SwidgetInsertSensorDescription(
+        key="distance",
+        function="proximity",
+        field="distance",
+        name="Distance",
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfLength.MILLIMETERS,
     ),
 )
 
@@ -210,6 +310,43 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
 )
 
 
+# Host-side power sensors. Materialise per host component that declares
+# the ``power`` function — that's the firmware's signal that the
+# component has current monitoring (a duplex outlet's measurement-only
+# socket also declares ``power`` even though it has no toggle).
+HOST_POWER_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
+    SwidgetHostSensorDescription(
+        key="power_current",
+        function="power",
+        field="current",
+        name="Current power",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        suggested_display_precision=1,
+    ),
+    SwidgetHostSensorDescription(
+        key="power_avg_today",
+        function="power",
+        field="avg",
+        name="Average power today",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+    ),
+    SwidgetHostSensorDescription(
+        key="power_avg_on",
+        function="power",
+        field="avgOn",
+        name="Average power while on",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        suggested_display_precision=1,
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -220,6 +357,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         SwidgetHostTypeSensor(coordinator),
         SwidgetInsertTypeSensor(coordinator),
+        SwidgetRssiSensor(coordinator),
     ]
     # One sensor per component on each assembly so the function list for
     # each component is visible directly on the device page (the state)
@@ -283,6 +421,41 @@ async def async_setup_entry(
                             coordinator, component_id, description
                         )
                     )
+    # Host power sensors. Any component that declares the ``power``
+    # function gets the trio (current / today's average / average-on).
+    # Duplex outlets declare ``power`` on both sockets — including the
+    # measurement-only one — so we iterate the full component list and
+    # name them based on whether the component is controllable:
+    #   - power + toggle → the controlled socket / load (no suffix when
+    #     it's the only controlled one; ``(component N)`` if there are
+    #     several, e.g. multi-load dimmers)
+    #   - power but no toggle → the duplex's measurement-only socket,
+    #     surfaced as ``(uncontrolled outlet)``
+    if host is not None:
+        power_components = [
+            cid
+            for cid, component in host.components.items()
+            if "power" in component.functions
+        ]
+        controllable = [
+            cid
+            for cid in power_components
+            if "toggle" in host.components[cid].functions
+        ]
+        for component_id in power_components:
+            component = host.components[component_id]
+            if "toggle" not in component.functions:
+                name_suffix = "uncontrolled outlet"
+            elif len(controllable) > 1:
+                name_suffix = f"component {component_id}"
+            else:
+                name_suffix = ""
+            for description in HOST_POWER_SENSOR_DESCRIPTIONS:
+                entities.append(
+                    SwidgetHostPowerSensor(
+                        coordinator, component_id, description, name_suffix
+                    )
+                )
     async_add_entities(entities)
 
 
@@ -448,6 +621,28 @@ class SwidgetHostFunctionSensor(SwidgetEntity, SensorEntity):
         return default
 
 
+class SwidgetHostPowerSensor(SwidgetHostFunctionSensor):
+    """Host power sensor with per-component name disambiguation.
+
+    Duplex outlets declare ``power`` on both sockets, so two of these
+    can land on a single device. The caller passes a name suffix —
+    ``"uncontrolled outlet"`` for the duplex's measurement-only socket
+    (no ``toggle``), ``"component N"`` for multi-load setups, or empty
+    when no disambiguation is needed.
+    """
+
+    def __init__(
+        self,
+        coordinator: SwidgetDataUpdateCoordinator,
+        component_id: str,
+        description: SwidgetHostSensorDescription,
+        name_suffix: str,
+    ) -> None:
+        super().__init__(coordinator, component_id, description)
+        if name_suffix:
+            self._attr_name = f"{description.name} ({name_suffix})"
+
+
 class SwidgetHostTypeSensor(SwidgetEntity, SensorEntity):
     """Reports the host (base device) type, e.g. switch, outlet, dimmer.
 
@@ -493,6 +688,49 @@ class SwidgetInsertTypeSensor(SwidgetEntity, SensorEntity):
         return _assembly_type_label(
             self.coordinator, self.coordinator.device.insert_type, "insert"
         )
+
+
+class SwidgetRssiSensor(SwidgetEntity, SensorEntity):
+    """WiFi signal strength in dBm.
+
+    The SDK populates ``device.rssi`` from ``state["connection"]["rssi"]``
+    inside ``process_state`` and falls back to ``0`` on exception. We
+    treat ``0`` (and a missing attribute, before the first state
+    arrives) as unavailable since 0 dBm is non-physical for a connected
+    WiFi device — it's the SDK's missing-data sentinel.
+
+    Disabled by default to match the HA convention for diagnostic WiFi
+    RSSI sensors.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_name = "Signal strength"
+    _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+
+    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+        """Initialize the RSSI sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.device.mac_address}_rssi"
+
+    def _rssi(self) -> int | None:
+        value = getattr(self.coordinator.device, "rssi", None)
+        if value in (None, 0):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def available(self) -> bool:
+        return self._rssi() is not None
+
+    @property
+    def native_value(self) -> int | None:
+        return self._rssi()
 
 
 class SwidgetTimerLevelSensor(SwidgetEntity, SensorEntity):
