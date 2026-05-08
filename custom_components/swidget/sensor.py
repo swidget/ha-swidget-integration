@@ -325,25 +325,6 @@ HOST_POWER_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=1,
     ),
-    SwidgetHostSensorDescription(
-        key="power_avg_today",
-        function="power",
-        field="avg",
-        name="Average power today",
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfPower.WATT,
-    ),
-    SwidgetHostSensorDescription(
-        key="power_avg_on",
-        function="power",
-        field="avgOn",
-        name="Average power while on",
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfPower.WATT,
-        suggested_display_precision=1,
-    ),
 )
 
 
