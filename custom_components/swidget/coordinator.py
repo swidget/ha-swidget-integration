@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import logging
+import time
 from typing import Any
 
 from swidget import SwidgetDevice
@@ -15,6 +16,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 _LOGGER = logging.getLogger(__name__)
 
 FALLBACK_POLL_INTERVAL = timedelta(seconds=30)
+# Re-fetch device_config periodically to recover from cache drift.
+# The SDK's update() deliberately skips device_config to keep polls
+# cheap, and an unsolicited partial-update websocket push will
+# wholesale-replace the local cache (process_device_config doesn't
+# merge). A periodic full GET — sent over the websocket when connected
+# — is the cheap, eventually-consistent net: any corruption heals
+# itself within one tick.
+DEVICE_CONFIG_REFRESH_INTERVAL_SEC = 5 * 60
 
 
 def _structure_fingerprint(device: SwidgetDevice) -> tuple[Any, ...]:
@@ -67,6 +76,9 @@ class SwidgetDataUpdateCoordinator(DataUpdateCoordinator[None]):
         self.entry_id = entry_id
         self._structure_fingerprint: tuple[Any, ...] | None = None
         self._reload_pending = False
+        # Initialise to "now" so we don't issue an immediate redundant
+        # device_config refresh — entry setup already pulled it via HTTP.
+        self._device_config_last_refresh: float = time.monotonic()
         super().__init__(
             hass,
             _LOGGER,
@@ -84,6 +96,21 @@ class SwidgetDataUpdateCoordinator(DataUpdateCoordinator[None]):
             await self.device.update()
         except SwidgetException as err:
             raise UpdateFailed(f"Error communicating with device: {err}") from err
+        # Periodic device_config refresh, gated by elapsed time rather
+        # than by tick count so the cadence is independent of the poll
+        # interval. ``get_device_config`` is fire-and-forget over the
+        # websocket — we don't await the response here; it lands on the
+        # message callback and updates the cache asynchronously.
+        now = time.monotonic()
+        if now - self._device_config_last_refresh >= DEVICE_CONFIG_REFRESH_INTERVAL_SEC:
+            try:
+                await self.device.get_device_config()
+                self._device_config_last_refresh = now
+            except SwidgetException as err:
+                # A failed refresh shouldn't fail the whole coordinator
+                # update — state is the priority signal; the cache will
+                # try again next tick.
+                _LOGGER.warning("device_config refresh failed: %s", err)
 
     async def _websocket_update(self, message: object) -> None:
         """Handle a push update from the device websocket.
