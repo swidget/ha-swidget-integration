@@ -339,6 +339,7 @@ async def async_setup_entry(
         SwidgetHostTypeSensor(coordinator),
         SwidgetInsertTypeSensor(coordinator),
         SwidgetRssiSensor(coordinator),
+        SwidgetIpAddressSensor(coordinator),
     ]
     # One sensor per component on each assembly so the function list for
     # each component is visible directly on the device page (the state)
@@ -727,6 +728,30 @@ class SwidgetRssiSensor(SwidgetEntity, SensorEntity):
     @property
     def native_value(self) -> int | None:
         return self._rssi()
+
+
+class SwidgetIpAddressSensor(SwidgetEntity, SensorEntity):
+    """Current IP address of the device.
+
+    The IP also drives ``configuration_url`` on the device card (the
+    "Visit" link), but that hides the address itself behind the link
+    label — surfacing it as a diagnostic sensor makes it visible at a
+    glance for network troubleshooting.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "IP address"
+    _attr_icon = "mdi:ip-network"
+
+    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+        """Initialize the IP address sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.device.mac_address}_ip_address"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the device's current IP address."""
+        return getattr(self.coordinator.device, "ip_address", None) or None
 
 
 class SwidgetTimerLevelSensor(SwidgetEntity, SensorEntity):
