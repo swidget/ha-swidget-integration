@@ -18,6 +18,7 @@ PLATFORMS: Final[list[Platform]] = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.UPDATE,
 ]
 
 CONF_TOKEN_NAME: Final = "token_name"
