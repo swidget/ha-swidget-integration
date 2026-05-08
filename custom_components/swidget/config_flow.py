@@ -18,6 +18,7 @@ from swidget.discovery import (
 from homeassistant.components import ssdp
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_SECRET_KEY,
@@ -161,12 +162,27 @@ class SwidgetConfigFlow(ConfigFlow, domain=DOMAIN):
             "host": self._host or "",
         }
 
+        # The token *name* is just an HTTP header name — not a secret —
+        # but HA's frontend masks any field whose key contains "token",
+        # "secret", "key", etc. by default. Force a plain text input via
+        # an explicit TextSelector so the user can see what they're
+        # typing. The secret key stays masked (PASSWORD).
         return self.async_show_form(
             step_id="credentials",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_TOKEN_NAME, default=DEFAULT_TOKEN_NAME): str,
-                    vol.Required(CONF_SECRET_KEY): str,
+                    vol.Required(
+                        CONF_TOKEN_NAME, default=DEFAULT_TOKEN_NAME
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.TEXT
+                        )
+                    ),
+                    vol.Required(CONF_SECRET_KEY): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.PASSWORD
+                        )
+                    ),
                 }
             ),
             description_placeholders=placeholders,
