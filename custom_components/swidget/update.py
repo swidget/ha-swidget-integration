@@ -119,14 +119,22 @@ class SwidgetUpdateEntity(SwidgetEntity, UpdateEntity):
 
     async def async_update(self) -> None:
         """Refresh the available-versions array from the device."""
+        ip = getattr(self.coordinator.device, "ip_address", "?")
         try:
             versions = await self.coordinator.device.check_for_updates()
         except SwidgetException as err:
-            _LOGGER.debug("Update check failed: %s", err)
+            _LOGGER.warning("Update check failed for %s: %s", ip, err)
             return
         # ``check_for_updates`` returns a lex-sorted list — re-store as
         # a plain list so latest_version can do its own semver sort.
         self._available_versions = [v for v in versions if isinstance(v, str)]
+        _LOGGER.info(
+            "Swidget %s update check: installed=%s available=%s -> latest=%s",
+            ip,
+            self.installed_version,
+            self._available_versions,
+            self.latest_version,
+        )
 
     async def async_install(
         self, version: str | None, backup: bool, **kwargs: Any
