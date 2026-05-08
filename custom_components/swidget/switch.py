@@ -12,6 +12,7 @@ from homeassistant.components.switch import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -48,6 +49,12 @@ async def async_setup_entry(
 
     if device.insert_type == InsertType.VIDEO:
         entities.append(SwidgetRtspSwitch(coordinator))
+
+    # Gate on the firmware actually carrying the field — older builds
+    # may omit it. Reading the config dict directly avoids guessing.
+    config = device.device_config.config if device.device_config else {}
+    if "debugEnabled" in config.get("configServer", {}):
+        entities.append(SwidgetAllowHttpSwitch(coordinator))
 
     async_add_entities(entities)
 
@@ -148,3 +155,46 @@ class SwidgetRtspSwitch(SwidgetEntity, SwitchEntity):
         """Disable the RTSP server."""
         await self.coordinator.device.set_rtsp_enabled(False)
         await self.coordinator.async_request_refresh()
+
+
+class SwidgetAllowHttpSwitch(SwidgetEntity, SwitchEntity):
+    """One-way toggle for ``configServer.debugEnabled``.
+
+    Once HTTP traffic is allowed on the device's config server, the
+    firmware doesn't permit disabling it from the network — that has to
+    happen on the device itself. We model this by accepting turn_on and
+    rejecting turn_off with a HomeAssistantError so the user gets
+    explicit feedback rather than a silently-ignored click.
+    """
+
+    _attr_translation_key = "allow_http"
+    _attr_name = "Allow HTTP Traffic"
+
+    def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
+        """Initialize the allow-HTTP switch."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.device.mac_address}_allow_http"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return current ``configServer.debugEnabled``, or None if unknown."""
+        device_config = self.coordinator.device.device_config
+        if device_config is None:
+            return None
+        try:
+            return bool(device_config.config["configServer"]["debugEnabled"])
+        except (KeyError, TypeError):
+            return None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Allow HTTP traffic on the config server."""
+        await self.coordinator.device.set_device_config(
+            {"configServer": {"debugEnabled": True}}
+        )
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Reject — the device doesn't support disabling this from the network."""
+        raise HomeAssistantError(
+            "Allow HTTP Traffic can't be disabled remotely; revert it on the device."
+        )
