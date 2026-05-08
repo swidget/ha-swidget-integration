@@ -80,10 +80,14 @@ class SwidgetUpdateEntity(SwidgetEntity, UpdateEntity):
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL | UpdateEntityFeature.SPECIFIC_VERSION
     )
-    # CoordinatorEntity defaults this to False because the coordinator
-    # owns the cadence, but our update check has its own SCAN_INTERVAL —
-    # and a much rarer one — so let HA poll us directly.
-    _attr_should_poll = True
+    # CoordinatorEntity sets ``should_poll = False`` as a class attribute
+    # (which shadows the Entity property that reads ``_attr_should_poll``),
+    # so the only way to opt back into HA's own polling is to override
+    # the class attribute itself. Our update check has its own
+    # SCAN_INTERVAL — much rarer than the coordinator tick — so we want
+    # HA to call ``async_update`` directly rather than piggyback on the
+    # coordinator.
+    should_poll = True
 
     def __init__(self, coordinator: SwidgetDataUpdateCoordinator) -> None:
         """Initialize the update entity."""
