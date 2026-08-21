@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
 import time
@@ -24,6 +25,22 @@ FALLBACK_POLL_INTERVAL = timedelta(seconds=30)
 # — is the cheap, eventually-consistent net: any corruption heals
 # itself within one tick.
 DEVICE_CONFIG_REFRESH_INTERVAL_SEC = 5 * 60
+
+# Fan boost has no stored duration in firmware — every boost request
+# carries its own ``minutes`` (a uint8, so 255 is the ceiling). The
+# desired duration therefore lives integration-side, shared between the
+# Boost switch (which sends it on turn-on) and the Boost duration
+# select (which edits it). 0 means "no timer": boost runs until
+# turned off (sent as ``{"mode": "on"}``).
+DEFAULT_FAN_BOOST_MINUTES = 20
+
+# Same integration-side storage for the fan's speed override (the
+# ``timer`` function): the user sets a temporary CFM via the fan speed
+# entity, which firmware holds until changed; optionally a timer
+# reverts it to the default CFM after N minutes. 0 = "Until changed":
+# no timer is armed and the override persists. Shared between the
+# Speed override switch and its duration select.
+DEFAULT_FAN_OVERRIDE_MINUTES = 0
 
 
 def _structure_fingerprint(device: SwidgetDevice) -> tuple[Any, ...]:
@@ -74,6 +91,18 @@ class SwidgetDataUpdateCoordinator(DataUpdateCoordinator[None]):
         """Initialize the coordinator."""
         self.device = device
         self.entry_id = entry_id
+        # Desired boost duration per host component, in minutes. Seeded
+        # by the Boost duration select on restore; read by the Boost switch.
+        self.fan_boost_minutes: dict[str, int] = {}
+        # Same for the speed override timer (Speed override switch +
+        # its duration select). 0 = no timer ("Until changed").
+        self.fan_override_minutes: dict[str, int] = {}
+        # ``time.monotonic()`` deadline per host component until which
+        # the ERV's datapoints are considered mid-ramp and untrusted —
+        # they flap while the unit spins up/down. Set by the mode/speed
+        # selects on every selection; read by both so one command
+        # freezes the other dropdown too.
+        self.fan_settle_until: dict[str, float] = {}
         self._structure_fingerprint: tuple[Any, ...] | None = None
         self._reload_pending = False
         # Initialise to "now" so we don't issue an immediate redundant
@@ -111,6 +140,96 @@ class SwidgetDataUpdateCoordinator(DataUpdateCoordinator[None]):
                 # update — state is the priority signal; the cache will
                 # try again next tick.
                 _LOGGER.warning("device_config refresh failed: %s", err)
+
+    async def async_apply_device_config(self, updates: dict) -> None:
+        """Write a sparse config update and re-read until the device settles.
+
+        The Pesna fans apply several config fields (runtime/autoRuntime,
+        sensor bounds, balancing, default CFM) to the fan over the
+        serial link asynchronously — the full GET that set_device_config
+        issues right after its POST can still return the pre-ack values,
+        which would freeze a stale reading into the cache until the next
+        periodic refresh (up to DEVICE_CONFIG_REFRESH_INTERVAL_SEC).
+        Schedule a couple of short-delay re-reads so entities settle on
+        the acked values within seconds instead.
+        """
+        await self.device.set_device_config(updates)
+        await self.async_request_refresh()
+
+        async def _settle() -> None:
+            for delay in (3, 10):
+                await asyncio.sleep(delay)
+                try:
+                    await self.device.get_device_config()
+                except SwidgetException as err:
+                    _LOGGER.debug("post-write config re-read failed: %s", err)
+                    return
+                self.async_update_listeners()
+
+        self.hass.async_create_task(_settle())
+
+    async def async_set_fan_boost(self, component_id: str, enable: bool) -> None:
+        """Start or stop a fan boost using the stored per-component duration."""
+        if not enable:
+            command: dict = {"mode": "off"}
+        elif minutes := self.fan_boost_minutes.get(
+            component_id, DEFAULT_FAN_BOOST_MINUTES
+        ):
+            command = {"mode": "timer", "minutes": minutes}
+        else:
+            command = {"mode": "on"}
+        await self.device.send_command(
+            assembly="host",
+            component=component_id,
+            function="boost",
+            command=command,
+        )
+        await self.async_request_refresh()
+
+    async def async_arm_fan_override_timer(self, component_id: str) -> None:
+        """Send the stored speed-override duration to the device.
+
+        A stored 0 ("Until changed") sends ``{"minutes": 0}``, which
+        firmware treats as an explicit clear that holds the current
+        speed — exactly the "persist until the user changes it"
+        semantics; it's a no-op when no timer is counting down.
+        """
+        minutes = self.fan_override_minutes.get(
+            component_id, DEFAULT_FAN_OVERRIDE_MINUTES
+        )
+        await self.device.send_command(
+            assembly="host",
+            component=component_id,
+            function="timer",
+            command={"minutes": minutes},
+        )
+        await self.async_request_refresh()
+
+    async def async_end_fan_override(self, component_id: str) -> None:
+        """End the speed override via the host toggle.
+
+        Firmware's fan ``on()`` cancels a running custom timer and
+        clears boost/manual/balance overrides, restoring the default
+        CFM without a manual volume write — sending the default as a
+        CFM command instead would itself register as a new manual
+        override and clobber speed changes made on the unit's controls.
+
+        A plain toggle-on can't be used while the fan is running:
+        ``HostComponent::on()`` (component.cpp::1664) drops a toggle-on
+        when ``data.powerOn`` is already true, so it never reaches the
+        override cleanup. Until firmware lets a redundant toggle-on
+        through for fan hosts, cycle off -> on; the off performs the
+        full cleanup and the on restarts operation at the default CFM
+        (at the price of a brief motor blip).
+        """
+        for state in ("off", "on"):
+            await self.device.send_command(
+                assembly="host",
+                component=component_id,
+                function="toggle",
+                command={"state": state},
+            )
+        await self.async_request_refresh()
 
     async def _websocket_update(self, message: object) -> None:
         """Handle a push update from the device websocket.

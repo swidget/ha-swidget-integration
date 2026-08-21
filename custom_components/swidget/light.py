@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .controls import numbered_name
 from .coordinator import SwidgetDataUpdateCoordinator
 from .entity import SwidgetEntity
 
@@ -63,7 +64,6 @@ class SwidgetDimmerLight(SwidgetEntity, LightEntity):
     falls back to the device's stored on-default via ``toggle``.
     """
 
-    _attr_name = "Light"
     _attr_color_mode = ColorMode.BRIGHTNESS
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
 
@@ -72,6 +72,7 @@ class SwidgetDimmerLight(SwidgetEntity, LightEntity):
     ) -> None:
         """Initialize the dimmer light."""
         super().__init__(coordinator)
+        self._attr_name = numbered_name(coordinator.device, "main_light", "Light")
         self._component_id = component_id
         self._attr_unique_id = (
             f"{coordinator.device.mac_address}_dimmer_{component_id}"
@@ -136,7 +137,6 @@ class SwidgetDimmerLight(SwidgetEntity, LightEntity):
 class SwidgetFanLight(SwidgetEntity, LightEntity):
     """The integrated light on a Pesna bath-fan host (on/off only)."""
 
-    _attr_name = "Light"
     _attr_color_mode = ColorMode.ONOFF
     _attr_supported_color_modes = {ColorMode.ONOFF}
     _attr_translation_key = "fan_light"
@@ -146,6 +146,7 @@ class SwidgetFanLight(SwidgetEntity, LightEntity):
     ) -> None:
         """Initialize the fan light entity."""
         super().__init__(coordinator)
+        self._attr_name = numbered_name(coordinator.device, "fan_light", "Light")
         self._component_id = component_id
         self._attr_unique_id = (
             f"{coordinator.device.mac_address}_host_{component_id}_fan_light"
@@ -202,7 +203,6 @@ class SwidgetGuideLight(SwidgetEntity, LightEntity):
     restore the previous look instead of defaulting to white forever.
     """
 
-    _attr_name = "Guide light"
     _attr_color_mode = ColorMode.RGB
     _attr_supported_color_modes = {ColorMode.RGB}
 
@@ -211,6 +211,9 @@ class SwidgetGuideLight(SwidgetEntity, LightEntity):
     ) -> None:
         """Initialize the RGB guide light."""
         super().__init__(coordinator)
+        self._attr_name = numbered_name(
+            coordinator.device, "guide_light", "Guide light"
+        )
         self._component_id = component_id
         self._attr_unique_id = (
             f"{coordinator.device.mac_address}_insert_{component_id}_cled"

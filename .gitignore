@@ -14,6 +14,9 @@ package.json
 # Local notes
 CLAUDE.md
 
+# Local dev/deploy tooling (Pi deploy script, docker compose, results dumps)
+dev/
+
 # Editor / OS
 .idea/
 .vscode/

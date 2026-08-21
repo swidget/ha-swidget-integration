@@ -183,6 +183,20 @@ async def async_setup_entry(
                     and description.field not in installed_modules
                 ):
                     continue
+                # ``filter`` carries needsCleaning/needsReplacement
+                # per-model ("depends on summary" in the datapoint
+                # spec) — e.g. the FV15 Plus reports only
+                # needsCleaning. Entry setup has already pulled a full
+                # state, so gate each sensor on its field actually
+                # being reported rather than materializing a
+                # permanently-unknown entity.
+                if description.function == "filter":
+                    filter_state = component.functions.get("filter")
+                    if (
+                        not isinstance(filter_state, dict)
+                        or description.field not in filter_state
+                    ):
+                        continue
                 entities.append(
                     SwidgetHostBinarySensor(coordinator, component_id, description)
                 )

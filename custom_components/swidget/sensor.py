@@ -28,7 +28,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import (
+    BALANCEDHOME_ELITE_FAN_MODEL_CODES,
+    DOMAIN,
+    ELITE_FAN_MODEL_CODES,
+)
 from .coordinator import SwidgetDataUpdateCoordinator
 from .entity import SwidgetEntity
 
@@ -67,6 +71,18 @@ class SwidgetHostSensorDescription(SensorEntityDescription):
     # only while there is an error). Setting a default here lets the
     # entity surface a meaningful resting value instead of "Unknown".
     default_value: float | int | str | None = None
+    # Wire values that aren't measurements: the sensor goes Unavailable
+    # while one is reported. The ERV airflow datapoints use CFM 255 as
+    # a "recirculating" sentinel — displaying it as 255 CFM would both
+    # lie on the dashboard and pollute long-term statistics, and
+    # Unavailable (vs Unknown) conveys that the reading cannot exist
+    # in the unit's current mode.
+    sentinel_values: frozenset[int] = frozenset()
+    # Attached-unit model codes (summary ``code``) that declare the
+    # function in their summary but don't actually carry the sensor —
+    # the entity is skipped rather than created permanently
+    # Unavailable.
+    not_model_codes: frozenset[str] = frozenset()
 
 
 # Catalogue of insert measurement sensors. New sensors usually require
@@ -198,7 +214,25 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         function="status",
         field=None,
         name="Status",
-        entity_category=EntityCategory.DIAGNOSTIC,
+        device_class=SensorDeviceClass.ENUM,
+        # The complete vocabulary from PensaComms::getFanStatus (the
+        # IB-series set; the FV-15 Plus reports the normal/int/limit
+        # subset with the same strings, so one options list covers all
+        # models). "unknown" is the firmware's own fallback for an
+        # undocumented wire status; "not supported" is returned by
+        # models without status reporting.
+        options=[
+            "normal",
+            "defrost",
+            "boost",
+            "humidity",
+            "auto",
+            "int",
+            "limit",
+            "balancing",
+            "unknown",
+            "not supported",
+        ],
     ),
     SwidgetHostSensorDescription(
         key="fan_speed",
@@ -221,6 +255,8 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         name="Exhaust CFM",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfVolumeFlowRate.CUBIC_FEET_PER_MINUTE,
+        # 255 = "recirculating" (ERV), not an airflow reading.
+        sentinel_values=frozenset({255}),
     ),
     SwidgetHostSensorDescription(
         key="supply_cfm",
@@ -229,6 +265,8 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         name="Supply CFM",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfVolumeFlowRate.CUBIC_FEET_PER_MINUTE,
+        # 255 = "recirculating" (ERV), not an airflow reading.
+        sentinel_values=frozenset({255}),
     ),
     SwidgetHostSensorDescription(
         key="indoor_temperature",
@@ -239,6 +277,9 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         suggested_display_precision=1,
+        # The BalancedHome Elite declares ``indoors`` but carries only
+        # the outdoor temperature sensor.
+        not_model_codes=BALANCEDHOME_ELITE_FAN_MODEL_CODES,
     ),
     SwidgetHostSensorDescription(
         key="indoor_humidity",
@@ -249,6 +290,8 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=PERCENTAGE,
         suggested_display_precision=1,
+        # Only the Elite Plus ERVs carry humidity sensors.
+        not_model_codes=ELITE_FAN_MODEL_CODES,
     ),
     SwidgetHostSensorDescription(
         key="outdoor_temperature",
@@ -269,6 +312,8 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=PERCENTAGE,
         suggested_display_precision=1,
+        # Only the Elite Plus ERVs carry humidity sensors.
+        not_model_codes=ELITE_FAN_MODEL_CODES,
     ),
     SwidgetHostSensorDescription(
         key="duty_cycle",
@@ -282,7 +327,7 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         key="fan_timer_remaining",
         function="timer",
         field="minutes",
-        name="Fan timer remaining",
+        name="Speed override remaining",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         default_value=0,
     ),
@@ -306,6 +351,14 @@ HOST_FAN_SENSOR_DESCRIPTIONS: tuple[SwidgetHostSensorDescription, ...] = (
         field="offset",
         name="Balancing offset",
         entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SwidgetHostSensorDescription(
+        key="balancing_state",
+        function="balancing",
+        field="state",
+        name="Mesh Balance State",
+        device_class=SensorDeviceClass.ENUM,
+        options=["off", "unbalanced", "balanced"],
     ),
 )
 
@@ -356,7 +409,7 @@ async def async_setup_entry(
     # component that exposes the 3-tier load timer. Skip fan hosts —
     # they share the ``timer`` tag but with a different (single
     # ``minutes`` field) shape, surfaced via the fan-specific
-    # ``fan_timer_remaining`` sensor / ``Fan timer`` slider instead.
+    # ``fan_timer_remaining`` sensor / speed override controls instead.
     host = coordinator.device.assemblies.get("host")
     if host is not None:
         for component_id, component in host.components.items():
@@ -396,8 +449,12 @@ async def async_setup_entry(
             )
             if not is_fan:
                 continue
+            model_code = str(getattr(component, "model_code", "") or "")
             for description in HOST_FAN_SENSOR_DESCRIPTIONS:
-                if description.function in component.functions:
+                if (
+                    description.function in component.functions
+                    and model_code not in description.not_model_codes
+                ):
                     entities.append(
                         SwidgetHostFunctionSensor(
                             coordinator, component_id, description
@@ -570,8 +627,29 @@ class SwidgetHostFunctionSensor(SwidgetEntity, SensorEntity):
         except (KeyError, AttributeError):
             return None
 
+    def _sentinel_active(self) -> bool:
+        """Return True while the field reports a declared sentinel."""
+        if not self.entity_description.sentinel_values:
+            return False
+        value = self._function_value()
+        field = self.entity_description.field
+        field_value = value if field is None else (
+            value.get(field) if isinstance(value, dict) else None
+        )
+        return (
+            isinstance(field_value, (int, float))
+            and not isinstance(field_value, bool)
+            and int(field_value) in self.entity_description.sentinel_values
+        )
+
     @property
     def available(self) -> bool:
+        # A sentinel reading means the measurement cannot exist in the
+        # device's current mode (ERV airflow while recirculating), which
+        # is Unavailable rather than Unknown — checked first because it
+        # outranks a description default.
+        if self._sentinel_active():
+            return False
         # When the description supplies a default we're always able to
         # report *something* (the default), even if the firmware has
         # omitted the function or field — surface that as available so
@@ -614,6 +692,11 @@ class SwidgetHostFunctionSensor(SwidgetEntity, SensorEntity):
         if field_value is None or isinstance(field_value, bool):
             return default
         if isinstance(field_value, (int, float, str)):
+            if (
+                isinstance(field_value, (int, float))
+                and int(field_value) in self.entity_description.sentinel_values
+            ):
+                return default
             return field_value
         return default
 

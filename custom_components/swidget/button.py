@@ -1,13 +1,15 @@
-"""Button platform — host load timer level advance."""
+"""Button platform — host load timer level advance and filter reset."""
 
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .controls import numbered_name
 from .coordinator import SwidgetDataUpdateCoordinator
 from .entity import SwidgetEntity
 
@@ -36,6 +38,15 @@ async def async_setup_entry(
                 entities.append(
                     SwidgetTimerAdvanceButton(coordinator, component_id)
                 )
+            # Filter reset: ``filter`` isn't declared in the summary
+            # functions list — it only leaks into the functions dict
+            # from state (like the filter binary sensors, which gate
+            # the same way). Setup runs after the entry's first
+            # refresh, so filter-tracking fans have the key by now.
+            if isinstance(component.functions.get("filter"), dict):
+                entities.append(
+                    SwidgetFilterResetButton(coordinator, component_id)
+                )
 
     async_add_entities(entities)
 
@@ -47,13 +58,14 @@ class SwidgetTimerAdvanceButton(SwidgetEntity, ButtonEntity):
     physical timer button on a 20/40/60 switch.
     """
 
-    _attr_name = "Advance timer level"
-
     def __init__(
         self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
     ) -> None:
         """Initialize the timer-advance button."""
         super().__init__(coordinator)
+        self._attr_name = numbered_name(
+            coordinator.device, "timer_advance", "Advance timer level"
+        )
         self._component_id = component_id
         self._attr_unique_id = (
             f"{coordinator.device.mac_address}_host_{component_id}_timer_advance"
@@ -66,5 +78,41 @@ class SwidgetTimerAdvanceButton(SwidgetEntity, ButtonEntity):
             component=self._component_id,
             function="timer",
             command={"up": True},
+        )
+        await self.coordinator.async_request_refresh()
+
+
+class SwidgetFilterResetButton(SwidgetEntity, ButtonEntity):
+    """Reset the fan's filter notification.
+
+    Sends ``{"clean": true}`` on the ``filter`` function per
+    request_handling.md (the request has no response payload). Clears
+    the needsCleaning/needsReplacement flags on the Panasonic unit —
+    press after actually cleaning or replacing the filter. The unit
+    may take a poll cycle to reflect the cleared flags.
+    """
+
+    _attr_name = "Reset filter notification"
+    _attr_translation_key = "fan_filter_reset"
+    _attr_icon = "mdi:air-filter"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: SwidgetDataUpdateCoordinator, component_id: str
+    ) -> None:
+        """Initialize the filter-reset button."""
+        super().__init__(coordinator)
+        self._component_id = component_id
+        self._attr_unique_id = (
+            f"{coordinator.device.mac_address}_host_{component_id}_filter_reset"
+        )
+
+    async def async_press(self) -> None:
+        """Send the filter-clean command to the device."""
+        await self.coordinator.device.send_command(
+            assembly="host",
+            component=self._component_id,
+            function="filter",
+            command={"clean": True},
         )
         await self.coordinator.async_request_refresh()
