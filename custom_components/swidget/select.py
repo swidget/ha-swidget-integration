@@ -1216,7 +1216,8 @@ class SwidgetFanDefaultCfmSelect(SwidgetEntity, SelectEntity):
     same allowed list / 10-CFM-stepped range as the Speed override CFM
     picker; the value is read from and written to
     ``device_config.host.components.<id>.defaultSa`` (supply) or
-    ``.defaultEa`` (exhaust).
+    ``.defaultEa`` (exhaust). When the allowed list includes 0, "Off"
+    represents a zero default, independently of the current airflow.
     """
 
     _attr_icon = "mdi:speedometer-medium"
@@ -1277,7 +1278,10 @@ class SwidgetFanDefaultCfmSelect(SwidgetEntity, SelectEntity):
         state = self._airflow_state()
         if state is None:
             return []
-        return [f"{v} CFM" for v in _cfm_values(state)]
+        options = [f"{v} CFM" for v in _cfm_values(state)]
+        if _cfm_allows_off(state):
+            options.insert(0, _CFM_OFF_OPTION)
+        return options
 
     @property
     def available(self) -> bool:
@@ -1290,21 +1294,20 @@ class SwidgetFanDefaultCfmSelect(SwidgetEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """Return the configured default, if it sits on an offered step."""
+        """Return the configured default, including Off when supported."""
         default = self._config_default()
         state = self._airflow_state()
-        if default is None or state is None or default not in _cfm_values(state):
+        if default is None or state is None:
+            return None
+        if default == 0 and _cfm_allows_off(state):
+            return _CFM_OFF_OPTION
+        if default not in _cfm_values(state):
             return None
         return f"{default} CFM"
 
     async def async_select_option(self, option: str) -> None:
         """Persist the chosen default CFM to device config."""
+        cfm = 0 if option == _CFM_OFF_OPTION else int(option.split()[0])
         await self.coordinator.async_apply_device_config(
-            {
-                "host": {
-                    "components": {
-                        self._component_id: {self._config_key: int(option.split()[0])}
-                    }
-                }
-            }
+            {"host": {"components": {self._component_id: {self._config_key: cfm}}}}
         )
